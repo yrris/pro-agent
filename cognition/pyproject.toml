@@ -18,8 +18,10 @@ dependencies = [
     "psycopg[binary]>=3.2",        # PostgreSQL 驱动
     "pydantic>=2.9",               # State / 事件 schema
     "httpx>=0.27",                 # 外部 HTTP（rerank / 生图 等）
-    "anthropic>=0.39",             # Claude
+    "anthropic>=0.39",             # Claude（底层 SDK，生图等也可直用）
     "openai>=1.50",                # DeepSeek（OpenAI 兼容）/ 可选生图
+    "langchain-anthropic>=0.3",    # Claude 的 LangChain 封装：bind_tools + 规范 on_chat_model_* 事件
+    "langchain-openai>=0.3",       # DeepSeek(OpenAI 兼容) 的 LangChain 封装
 ]
 
 [project.optional-dependencies]

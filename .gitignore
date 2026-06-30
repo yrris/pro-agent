@@ -34,6 +34,10 @@ venv/
 /deploy/data/
 /deploy/volumes/
 
+# ===== 生成代码（由 `make proto` 从 proto/ 单一来源重新生成）=====
+/control-plane/internal/genproto/
+/cognition/cognition/genproto/
+
 # ===== 编辑器/系统 =====
 .idea/
 .vscode/

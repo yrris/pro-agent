@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package agent.v1;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "my-agent/control-plane/internal/genproto/agent/v1;agentv1";
+
+// 认知服务：一次 run = 一个 server-streaming RPC，流的顺序即事件顺序。
+// 客户端（Go 控制面）取消 ctx → 该 RPC 被取消（CANCELLED）→ Python 取消图执行。
+service CognitionService {
+  rpc Run(RunRequest) returns (stream Event);
+}
+
+message RunRequest {
+  string run_id = 1;                 // Go 生成的 UUID，run 的规范身份（事件归属）
+  string session_id = 2;             // 会话/归属 + LangGraph thread 作用域
+  string query = 3;                  // 用户输入
+  string agent_type = 4;             // 本阶段 "react"
+  int32 max_steps = 5;               // ReAct 循环上限
+  map<string, string> metadata = 6;  // trace_id / locale 等（扁平）
+  string schema_version = 7;         // "v1"
+}
+
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_TOOL_THOUGHT = 1;
+  EVENT_TYPE_TOOL_CALL = 2;
+  EVENT_TYPE_TOOL_RESULT = 3;
+  EVENT_TYPE_RESULT = 4;
+  // heartbeat 不在此：网关注入的传输关注点，不过 gRPC、不入库、不参与重放比对。
+}
+
+enum ToolCallStatus {
+  TOOL_CALL_STATUS_UNSPECIFIED = 0;
+  TOOL_CALL_STATUS_RUNNING = 1;
+  TOOL_CALL_STATUS_SUCCESS = 2;
+  TOOL_CALL_STATUS_FAILED = 3;
+}
+
+message Event {
+  uint64 seq = 1;          // 每 run 单调、无空洞、从 1；由 Python（因果源）分配
+  string run_id = 2;
+  string message_id = 3;   // 原位更新键；TOOL_CALL 时 == tool_call_id
+  EventType type = 4;
+  int64 ts_unix_ms = 5;    // Python 发射时间 → SSE messageTime
+  bool is_final = 6;       // 本条消息终态
+  bool finish = 7;         // 整个 run 终态；仅 RESULT 为 true
+  string step = 8;         // ReAct 步序/节点名（可观测）
+
+  oneof payload {
+    ThoughtPayload tool_thought = 16;
+    ToolPayload tool_call = 17;   // RUNNING / SUCCESS / FAILED
+    ToolPayload tool_result = 18; // 复用同结构，携带 observation + artifacts
+    ResultPayload result = 19;
+  }
+}
+
+message ThoughtPayload {
+  string text = 1;
+}
+
+message ToolPayload {
+  string tool_call_id = 1;          // == Event.message_id（TOOL_CALL）
+  string tool_name = 2;
+  string tool_provider = 3;         // 本阶段 "local"
+  ToolCallStatus status = 4;        // running → success | failed
+  int32 dispatch_index = 5;         // 同一轮内工具顺序
+  google.protobuf.Struct input = 6; // 解析后的参数对象（非字符串）
+  string tool_result = 7;           // observation 文本（TOOL_RESULT 用）
+  string summary = 8;               // "正在调用 X" / "X 调用完成" / "X 调用失败"
+  string error_msg = 9;             // FAILED 时
+  repeated ArtifactRef artifact_refs = 10;
+}
+
+message ResultPayload {
+  string text = 1;                       // 最终答复
+  repeated ArtifactRef artifact_refs = 2;
+}
+
+// 沿用原项目 8 字段形状：artifact UI 零改、缺文件降级显式。
+message ArtifactRef {
+  string resource_key = 1;
+  string name = 2;
+  string preview_url = 3;
+  string download_url = 4;
+  string file_name = 5;
+  string mime_type = 6;
+  int64 size = 7;
+  bool missing = 8;
+}
