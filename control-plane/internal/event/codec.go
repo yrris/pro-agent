@@ -26,8 +26,21 @@ func FromProto(p *agentv1.Event) (Envelope, error) {
 		Step:          p.GetStep(),
 	}
 	switch payload := p.GetPayload().(type) {
-	case *agentv1.Event_ToolThought:
-		e.Thought = &ThoughtPayload{Text: payload.ToolThought.GetText()}
+	case *agentv1.Event_ToolThought: // tool_thought 与 plan_thought 共用此槽
+		e.Thought = &ThoughtPayload{
+			Text:           payload.ToolThought.GetText(),
+			PlannerRoundID: payload.ToolThought.GetPlannerRoundId(),
+		}
+	case *agentv1.Event_Plan:
+		e.Plan = &PlanPayload{
+			Title:          payload.Plan.GetTitle(),
+			Steps:          payload.Plan.GetSteps(),
+			StepStatus:     payload.Plan.GetStepStatus(),
+			Notes:          payload.Plan.GetNotes(),
+			PlannerRoundID: payload.Plan.GetPlannerRoundId(),
+		}
+	case *agentv1.Event_Task:
+		e.Task = &TaskPayload{Text: payload.Task.GetText()}
 	case *agentv1.Event_ToolCall:
 		tool, err := toolPayloadFromProto(payload.ToolCall)
 		if err != nil {
@@ -105,6 +118,12 @@ func eventTypeFromProto(t agentv1.EventType) MessageType {
 		return TypeToolResult
 	case agentv1.EventType_EVENT_TYPE_RESULT:
 		return TypeResult
+	case agentv1.EventType_EVENT_TYPE_PLAN_THOUGHT:
+		return TypePlanThought
+	case agentv1.EventType_EVENT_TYPE_PLAN:
+		return TypePlan
+	case agentv1.EventType_EVENT_TYPE_TASK:
+		return TypeTask
 	default:
 		return ""
 	}
@@ -135,8 +154,19 @@ type sseFrame struct {
 	ToolThought  string          `json:"toolThought,omitempty"`
 	ToolResult   *sseToolResult  `json:"toolResult,omitempty"`
 	Result       string          `json:"result,omitempty"`
+	PlanThought  string          `json:"planThought,omitempty"`
+	Plan         *planFrame      `json:"plan,omitempty"`
+	Task         string          `json:"task,omitempty"`
 	ResultMap    map[string]any  `json:"resultMap,omitempty"`
 	ArtifactRefs []ArtifactRef   `json:"artifactRefs,omitempty"`
+}
+
+// planFrame 是 SSE 里 plan 对象的形状（plannerRoundId 放 resultMap，不在此）。
+type planFrame struct {
+	Title      string   `json:"title"`
+	Steps      []string `json:"steps"`
+	StepStatus []string `json:"stepStatus"`
+	Notes      []string `json:"notes"`
 }
 
 type sseToolResult struct {
@@ -195,6 +225,29 @@ func ToSSEFrame(e Envelope) ([]byte, error) {
 			frame.Result = e.Result.Text
 			frame.ArtifactRefs = e.Result.Artifacts
 		}
+	case TypePlanThought:
+		if e.Thought != nil {
+			frame.PlanThought = e.Thought.Text
+			if e.Thought.PlannerRoundID != "" {
+				frame.ResultMap = map[string]any{"plannerRoundId": e.Thought.PlannerRoundID}
+			}
+		}
+	case TypePlan:
+		if e.Plan != nil {
+			frame.Plan = &planFrame{
+				Title:      e.Plan.Title,
+				Steps:      e.Plan.Steps,
+				StepStatus: e.Plan.StepStatus,
+				Notes:      e.Plan.Notes,
+			}
+			if e.Plan.PlannerRoundID != "" {
+				frame.ResultMap = map[string]any{"plannerRoundId": e.Plan.PlannerRoundID}
+			}
+		}
+	case TypeTask:
+		if e.Task != nil {
+			frame.Task = e.Task.Text
+		}
 	}
 	return json.Marshal(frame)
 }
@@ -203,12 +256,16 @@ func ToSSEFrame(e Envelope) ([]byte, error) {
 // run_id/seq/type 等作为列单独存，故这里只存类型相关的 body。
 func (e Envelope) MarshalPayload() ([]byte, error) {
 	switch e.Type {
-	case TypeToolThought:
+	case TypeToolThought, TypePlanThought:
 		return json.Marshal(e.Thought)
 	case TypeToolCall, TypeToolResult:
 		return json.Marshal(e.Tool)
 	case TypeResult:
 		return json.Marshal(e.Result)
+	case TypePlan:
+		return json.Marshal(e.Plan)
+	case TypeTask:
+		return json.Marshal(e.Task)
 	default:
 		return nil, fmt.Errorf("event: cannot marshal payload for type %q", e.Type)
 	}
@@ -218,7 +275,7 @@ func (e Envelope) MarshalPayload() ([]byte, error) {
 // 调用方需先设置 e.Type（来自 message_type 列）。
 func (e *Envelope) UnmarshalPayload(data []byte) error {
 	switch e.Type {
-	case TypeToolThought:
+	case TypeToolThought, TypePlanThought:
 		var p ThoughtPayload
 		if err := json.Unmarshal(data, &p); err != nil {
 			return err
@@ -236,6 +293,18 @@ func (e *Envelope) UnmarshalPayload(data []byte) error {
 			return err
 		}
 		e.Result = &p
+	case TypePlan:
+		var p PlanPayload
+		if err := json.Unmarshal(data, &p); err != nil {
+			return err
+		}
+		e.Plan = &p
+	case TypeTask:
+		var p TaskPayload
+		if err := json.Unmarshal(data, &p); err != nil {
+			return err
+		}
+		e.Task = &p
 	default:
 		return fmt.Errorf("event: cannot unmarshal payload for type %q", e.Type)
 	}

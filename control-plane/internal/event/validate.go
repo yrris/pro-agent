@@ -58,6 +58,24 @@ func (e Envelope) Validate() error {
 		if !e.IsFinal {
 			return fmt.Errorf("event: result must have isFinal=true")
 		}
+	case TypePlanThought:
+		if e.Thought == nil {
+			return fmt.Errorf("event: plan_thought requires thought payload")
+		}
+	case TypePlan:
+		if e.Plan == nil {
+			return fmt.Errorf("event: plan requires plan payload")
+		}
+		if !e.IsFinal {
+			return fmt.Errorf("event: plan must have isFinal=true")
+		}
+	case TypeTask:
+		if e.Task == nil {
+			return fmt.Errorf("event: task requires task payload")
+		}
+		if !e.IsFinal {
+			return fmt.Errorf("event: task must have isFinal=true")
+		}
 	default:
 		return fmt.Errorf("event: invalid message type %q", e.Type)
 	}

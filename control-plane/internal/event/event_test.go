@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	agentv1 "my-agent/control-plane/internal/genproto/agent/v1"
 	"google.golang.org/protobuf/types/known/structpb"
+	agentv1 "my-agent/control-plane/internal/genproto/agent/v1"
 )
 
 const ts = int64(1700000000000)
@@ -74,6 +74,24 @@ func TestToSSEFrame_Golden(t *testing.T) {
 				Result: &ResultPayload{Text: "答案是 14"}},
 			want: `{"requestId":"r1","messageId":"res1","seq":5,"messageType":"result","messageTime":"1700000000000","isFinal":true,"finish":true,"result":"答案是 14"}`,
 		},
+		{
+			name: "plan_thought",
+			env: Envelope{Seq: 1, RunID: "r1", MessageID: "r1:plan:1", Type: TypePlanThought, TSUnixMs: ts, IsFinal: false,
+				Thought: &ThoughtPayload{Text: "先规划", PlannerRoundID: "pr1"}},
+			want: `{"requestId":"r1","messageId":"r1:plan:1","seq":1,"messageType":"plan_thought","messageTime":"1700000000000","isFinal":false,"finish":false,"planThought":"先规划","resultMap":{"plannerRoundId":"pr1"}}`,
+		},
+		{
+			name: "plan",
+			env: Envelope{Seq: 2, RunID: "r1", MessageID: "plan1", Type: TypePlan, TSUnixMs: ts, IsFinal: true,
+				Plan: &PlanPayload{Title: "计划", Steps: []string{"A", "B"}, StepStatus: []string{"in_progress", "not_started"}, Notes: []string{"", ""}, PlannerRoundID: "pr1"}},
+			want: `{"requestId":"r1","messageId":"plan1","seq":2,"messageType":"plan","messageTime":"1700000000000","isFinal":true,"finish":false,"plan":{"title":"计划","steps":["A","B"],"stepStatus":["in_progress","not_started"],"notes":["",""]},"resultMap":{"plannerRoundId":"pr1"}}`,
+		},
+		{
+			name: "task",
+			env: Envelope{Seq: 3, RunID: "r1", MessageID: "task1", Type: TypeTask, TSUnixMs: ts, IsFinal: true,
+				Task: &TaskPayload{Text: "做 A"}},
+			want: `{"requestId":"r1","messageId":"task1","seq":3,"messageType":"task","messageTime":"1700000000000","isFinal":true,"finish":false,"task":"做 A"}`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -95,6 +113,9 @@ func TestValidate(t *testing.T) {
 		"call_success": {Seq: 1, RunID: "r", MessageID: "tc", Type: TypeToolCall, IsFinal: true, Tool: &ToolPayload{ToolCallID: "tc", Status: StatusSuccess}},
 		"tool_result":  {Seq: 1, RunID: "r", MessageID: "tr", Type: TypeToolResult, IsFinal: true, Tool: &ToolPayload{ToolCallID: "tc"}},
 		"result":       {Seq: 1, RunID: "r", MessageID: "res", Type: TypeResult, IsFinal: true, Finish: true, Result: &ResultPayload{Text: "ok"}},
+		"plan_thought": {Seq: 1, RunID: "r", MessageID: "p", Type: TypePlanThought, Thought: &ThoughtPayload{Text: "x", PlannerRoundID: "pr"}},
+		"plan":         {Seq: 1, RunID: "r", MessageID: "pl", Type: TypePlan, IsFinal: true, Plan: &PlanPayload{Title: "t"}},
+		"task":         {Seq: 1, RunID: "r", MessageID: "tk", Type: TypeTask, IsFinal: true, Task: &TaskPayload{Text: "do"}},
 	}
 	for name, e := range valid {
 		if err := e.Validate(); err != nil {
@@ -103,15 +124,18 @@ func TestValidate(t *testing.T) {
 	}
 
 	invalid := map[string]Envelope{
-		"seq_zero":            {Seq: 0, RunID: "r", MessageID: "m", Type: TypeToolThought, Thought: &ThoughtPayload{}},
-		"no_runid":            {Seq: 1, MessageID: "m", Type: TypeToolThought, Thought: &ThoughtPayload{}},
-		"finish_on_non_result": {Seq: 1, RunID: "r", MessageID: "tc", Type: TypeToolCall, Finish: true, Tool: &ToolPayload{ToolCallID: "tc", Status: StatusRunning}},
-		"result_without_finish": {Seq: 1, RunID: "r", MessageID: "res", Type: TypeResult, IsFinal: true, Result: &ResultPayload{}},
+		"seq_zero":                {Seq: 0, RunID: "r", MessageID: "m", Type: TypeToolThought, Thought: &ThoughtPayload{}},
+		"no_runid":                {Seq: 1, MessageID: "m", Type: TypeToolThought, Thought: &ThoughtPayload{}},
+		"finish_on_non_result":    {Seq: 1, RunID: "r", MessageID: "tc", Type: TypeToolCall, Finish: true, Tool: &ToolPayload{ToolCallID: "tc", Status: StatusRunning}},
+		"result_without_finish":   {Seq: 1, RunID: "r", MessageID: "res", Type: TypeResult, IsFinal: true, Result: &ResultPayload{}},
 		"thought_missing_payload": {Seq: 1, RunID: "r", MessageID: "m", Type: TypeToolThought},
-		"call_id_mismatch":    {Seq: 1, RunID: "r", MessageID: "X", Type: TypeToolCall, Tool: &ToolPayload{ToolCallID: "tc", Status: StatusRunning}},
-		"call_running_final":  {Seq: 1, RunID: "r", MessageID: "tc", Type: TypeToolCall, IsFinal: true, Tool: &ToolPayload{ToolCallID: "tc", Status: StatusRunning}},
-		"call_bad_status":     {Seq: 1, RunID: "r", MessageID: "tc", Type: TypeToolCall, Tool: &ToolPayload{ToolCallID: "tc"}},
-		"bad_type":            {Seq: 1, RunID: "r", MessageID: "m", Type: MessageType("nope")},
+		"call_id_mismatch":        {Seq: 1, RunID: "r", MessageID: "X", Type: TypeToolCall, Tool: &ToolPayload{ToolCallID: "tc", Status: StatusRunning}},
+		"call_running_final":      {Seq: 1, RunID: "r", MessageID: "tc", Type: TypeToolCall, IsFinal: true, Tool: &ToolPayload{ToolCallID: "tc", Status: StatusRunning}},
+		"call_bad_status":         {Seq: 1, RunID: "r", MessageID: "tc", Type: TypeToolCall, Tool: &ToolPayload{ToolCallID: "tc"}},
+		"bad_type":                {Seq: 1, RunID: "r", MessageID: "m", Type: MessageType("nope")},
+		"plan_missing_payload":    {Seq: 1, RunID: "r", MessageID: "pl", Type: TypePlan, IsFinal: true},
+		"task_not_final":          {Seq: 1, RunID: "r", MessageID: "tk", Type: TypeTask, Task: &TaskPayload{Text: "do"}},
+		"plan_finish_true":        {Seq: 1, RunID: "r", MessageID: "pl", Type: TypePlan, IsFinal: true, Finish: true, Plan: &PlanPayload{Title: "t"}},
 	}
 	for name, e := range invalid {
 		if err := e.Validate(); err == nil {

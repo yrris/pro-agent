@@ -151,3 +151,38 @@ func TestDuplicateSeq(t *testing.T) {
 		t.Fatalf("expected ErrDuplicateSeq, got %v", err)
 	}
 }
+
+// Plan-Execute 新事件类型(plan_thought/plan/task)的迁移与往返。
+func TestPlanEventsRoundtrip(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	runs := store.NewRunRepository(pool)
+	events := store.NewEventRepository(pool)
+	if err := runs.CreateRun(ctx, store.CreateRunParams{RunID: "rplan", SessionID: "s1", OwnerID: "o1", QueryText: "x"}); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	envs := []event.Envelope{
+		{Seq: 1, RunID: "rplan", MessageID: "rplan:plan:1", Type: event.TypePlanThought, TSUnixMs: ts, Thought: &event.ThoughtPayload{Text: "规划中", PlannerRoundID: "pr1"}},
+		{Seq: 2, RunID: "rplan", MessageID: "plan1", Type: event.TypePlan, TSUnixMs: ts, IsFinal: true, Plan: &event.PlanPayload{Title: "T", Steps: []string{"A", "B"}, StepStatus: []string{"in_progress", "not_started"}, Notes: []string{"", ""}, PlannerRoundID: "pr1"}},
+		{Seq: 3, RunID: "rplan", MessageID: "task1", Type: event.TypeTask, TSUnixMs: ts, IsFinal: true, Task: &event.TaskPayload{Text: "做 A"}},
+	}
+	for _, e := range envs {
+		if err := e.Validate(); err != nil {
+			t.Fatalf("seq %d invalid: %v", e.Seq, err)
+		}
+		if err := events.Append(ctx, e); err != nil {
+			t.Fatalf("Append seq %d: %v", e.Seq, err)
+		}
+	}
+	got, err := events.ListByRun(ctx, "rplan")
+	if err != nil || len(got) != 3 {
+		t.Fatalf("ListByRun: %v (n=%d)", err, len(got))
+	}
+	for i := range got {
+		w, _ := event.ToSSEFrame(envs[i])
+		g, _ := event.ToSSEFrame(got[i])
+		if !jsonSemEqual(t, g, w) {
+			t.Errorf("plan-event roundtrip mismatch seq %d\n got %s\nwant %s", got[i].Seq, g, w)
+		}
+	}
+}

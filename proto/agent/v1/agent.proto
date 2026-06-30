@@ -28,6 +28,10 @@ enum EventType {
   EVENT_TYPE_TOOL_CALL = 2;
   EVENT_TYPE_TOOL_RESULT = 3;
   EVENT_TYPE_RESULT = 4;
+  // —— Plan-Execute 加性扩展（仍 v1，线兼容）——
+  EVENT_TYPE_PLAN_THOUGHT = 5; // 规划器思考（复用 ThoughtPayload，带 planner_round_id）
+  EVENT_TYPE_PLAN = 6;         // 计划快照（PlanPayload）
+  EVENT_TYPE_TASK = 7;         // 单个 <sep> 子任务（TaskPayload）
   // heartbeat 不在此：网关注入的传输关注点，不过 gRPC、不入库、不参与重放比对。
 }
 
@@ -49,14 +53,31 @@ message Event {
   string step = 8;         // ReAct 步序/节点名（可观测）
 
   oneof payload {
-    ThoughtPayload tool_thought = 16;
+    ThoughtPayload tool_thought = 16; // 也用于 PLAN_THOUGHT（按 type 区分）
     ToolPayload tool_call = 17;   // RUNNING / SUCCESS / FAILED
     ToolPayload tool_result = 18; // 复用同结构，携带 observation + artifacts
     ResultPayload result = 19;
+    PlanPayload plan = 20;
+    TaskPayload task = 21;
   }
 }
 
 message ThoughtPayload {
+  string text = 1;
+  string planner_round_id = 2; // 仅 plan_thought 填写；executor 的 tool_thought 留空
+}
+
+// 计划快照（plan 事件）：steps/step_status/notes 并行索引。
+message PlanPayload {
+  string title = 1;
+  repeated string steps = 2;
+  repeated string step_status = 3; // not_started | in_progress | completed | blocked
+  repeated string notes = 4;
+  string planner_round_id = 5;
+}
+
+// 单个子任务（task 事件，由 currentStep 按 "<sep>" 切分而来）。
+message TaskPayload {
   string text = 1;
 }
 

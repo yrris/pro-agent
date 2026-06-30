@@ -18,6 +18,10 @@ const (
 	TypeToolCall    MessageType = "tool_call"
 	TypeToolResult  MessageType = "tool_result"
 	TypeResult      MessageType = "result"
+	// —— Plan-Execute 加性扩展 ——
+	TypePlanThought MessageType = "plan_thought"
+	TypePlan        MessageType = "plan"
+	TypeTask        MessageType = "task"
 	// TypeHeartbeat 仅由网关注入，不经 gRPC、不入库、不参与重放比对。
 	TypeHeartbeat MessageType = "heartbeat"
 )
@@ -44,13 +48,30 @@ type Envelope struct {
 	Finish        bool  // 整个 run 终态；仅 result 为 true
 	Step          string
 
-	Thought *ThoughtPayload
-	Tool    *ToolPayload // tool_call 与 tool_result 共用
+	Thought *ThoughtPayload // tool_thought 与 plan_thought 共用
+	Tool    *ToolPayload    // tool_call 与 tool_result 共用
 	Result  *ResultPayload
+	Plan    *PlanPayload // plan 事件
+	Task    *TaskPayload // task 事件（单个 <sep> 子任务）
 }
 
-// ThoughtPayload 承载 tool_thought 的思考文本。
+// ThoughtPayload 承载 tool_thought / plan_thought 的思考文本。
 type ThoughtPayload struct {
+	Text           string `json:"text"`
+	PlannerRoundID string `json:"plannerRoundId,omitempty"` // 仅 plan_thought 填写
+}
+
+// PlanPayload 是计划快照（plan 事件）；steps/stepStatus/notes 并行索引。
+type PlanPayload struct {
+	Title          string   `json:"title"`
+	Steps          []string `json:"steps"`
+	StepStatus     []string `json:"stepStatus"`
+	Notes          []string `json:"notes"`
+	PlannerRoundID string   `json:"plannerRoundId,omitempty"`
+}
+
+// TaskPayload 是单个子任务（task 事件）。
+type TaskPayload struct {
 	Text string `json:"text"`
 }
 
