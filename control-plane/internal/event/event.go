@@ -1,0 +1,87 @@
+// Package event 定义贯穿控制面的规范事件模型（Envelope）及其与 proto / SSE / 存储的编解码。
+//
+// 它是“实时与回放同构”的关键枢纽：gRPC 收到的 proto Event 先转成 Envelope，
+// Envelope 既用于落库（payload JSONB），也用于经 ToSSEFrame 渲染成浏览器帧；
+// 回放时从库里重建 Envelope，再经同一个 ToSSEFrame 渲染——故重放帧与实时逐字段一致。
+package event
+
+import "encoding/json"
+
+// SchemaVersion 是事件契约的主版本内标记，随契约只增演进。
+const SchemaVersion = "v1"
+
+// MessageType 是事件的语义类型（与浏览器 SSE 的 messageType 字段一致）。
+type MessageType string
+
+const (
+	TypeToolThought MessageType = "tool_thought"
+	TypeToolCall    MessageType = "tool_call"
+	TypeToolResult  MessageType = "tool_result"
+	TypeResult      MessageType = "result"
+	// TypeHeartbeat 仅由网关注入，不经 gRPC、不入库、不参与重放比对。
+	TypeHeartbeat MessageType = "heartbeat"
+)
+
+// ToolStatus 是工具调用的生命周期状态。
+type ToolStatus string
+
+const (
+	StatusRunning ToolStatus = "running"
+	StatusSuccess ToolStatus = "success"
+	StatusFailed  ToolStatus = "failed"
+)
+
+// Envelope 是控制面内事件的规范表示（来源于 proto Event）。
+// 其中恰有一个 payload 指针非空，且与 Type 对应。
+type Envelope struct {
+	SchemaVersion string
+	Seq           uint64 // 每 run 单调、无空洞、从 1；由 Python 分配、Go 校验
+	RunID         string
+	MessageID     string // 原位更新键；tool_call 时 == Tool.ToolCallID
+	Type          MessageType
+	TSUnixMs      int64 // Python 发射时间 → SSE messageTime
+	IsFinal       bool  // 本条消息终态
+	Finish        bool  // 整个 run 终态；仅 result 为 true
+	Step          string
+
+	Thought *ThoughtPayload
+	Tool    *ToolPayload // tool_call 与 tool_result 共用
+	Result  *ResultPayload
+}
+
+// ThoughtPayload 承载 tool_thought 的思考文本。
+type ThoughtPayload struct {
+	Text string `json:"text"`
+}
+
+// ToolPayload 承载 tool_call（running/success/failed）与 tool_result。
+type ToolPayload struct {
+	ToolCallID    string          `json:"toolCallId"`
+	ToolName      string          `json:"toolName"`
+	ToolProvider  string          `json:"toolProvider"`
+	Status        ToolStatus      `json:"status,omitempty"`
+	DispatchIndex int32           `json:"dispatchIndex"`
+	Input         json.RawMessage `json:"input,omitempty"`  // 解析后的参数对象
+	ToolResult    string          `json:"toolResult,omitempty"` // observation 文本（tool_result）
+	Summary       string          `json:"summary,omitempty"`
+	ErrorMsg      string          `json:"errorMsg,omitempty"`
+	Artifacts     []ArtifactRef   `json:"artifacts,omitempty"`
+}
+
+// ResultPayload 承载最终答复。
+type ResultPayload struct {
+	Text      string        `json:"text"`
+	Artifacts []ArtifactRef `json:"artifacts,omitempty"`
+}
+
+// ArtifactRef 沿用原项目 8 字段形状：artifact UI 零改、缺文件降级显式。
+type ArtifactRef struct {
+	ResourceKey string `json:"resourceKey"`
+	Name        string `json:"name"`
+	PreviewURL  string `json:"previewUrl"`
+	DownloadURL string `json:"downloadUrl"`
+	FileName    string `json:"fileName"`
+	MimeType    string `json:"mimeType"`
+	Size        int64  `json:"size"`
+	Missing     bool   `json:"missing"`
+}
