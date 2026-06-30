@@ -65,7 +65,7 @@ func (c *grpcClient) RunAgent(ctx context.Context, req RunRequest) (Stream, erro
 		AgentType:     agentType,
 		MaxSteps:      req.MaxSteps,
 		SchemaVersion: event.SchemaVersion,
-	})
+	}, grpc.WaitForReady(true)) // 容忍认知面短暂未就绪/重连，在 run 超时内等待
 	if err != nil {
 		return nil, fmt.Errorf("cognition: open run stream: %w", err)
 	}
