@@ -15,6 +15,13 @@ type Config struct {
 	HeartbeatInterval time.Duration // SSE 心跳间隔
 	RunTimeout        time.Duration // 单次 run 超时
 	MaxSteps          int32         // ReAct 循环上限
+
+	// MinIO（产物对象存储）
+	MinioEndpoint  string
+	MinioAccessKey string
+	MinioSecretKey string
+	MinioBucket    string
+	MinioUseSSL    bool
 }
 
 func Load() Config {
@@ -26,6 +33,11 @@ func Load() Config {
 		HeartbeatInterval: time.Duration(envInt("HEARTBEAT_MS", 10000)) * time.Millisecond,
 		RunTimeout:        time.Duration(envInt("RUN_TIMEOUT_S", 600)) * time.Second,
 		MaxSteps:          int32(envInt("MAX_STEPS", 40)),
+		MinioEndpoint:     env("MINIO_ENDPOINT", "localhost:9000"),
+		MinioAccessKey:    env("MINIO_ACCESS_KEY", "minioadmin"),
+		MinioSecretKey:    env("MINIO_SECRET_KEY", "minioadmin"),
+		MinioBucket:       env("MINIO_BUCKET", "my-agent-artifacts"),
+		MinioUseSSL:       env("MINIO_USE_SSL", "false") == "true",
 	}
 }
 

@@ -115,7 +115,7 @@ func TestEndToEnd_RunAndReplay(t *testing.T) {
 	events := store.NewEventRepository(pool)
 	hub := stream.NewHub(events, time.Hour, discardLogger())
 	d := dispatch.New(4, runs, client, hub, 40, discardLogger())
-	router := api.NewRouter(d, runs, events, time.Minute, discardLogger())
+	router := api.NewRouter(d, runs, events, nil, time.Minute, discardLogger())
 
 	// 1) 发起 run，捕获 SSE。
 	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(`{"query":"算 2*(3+4)","sessionId":"s1"}`))

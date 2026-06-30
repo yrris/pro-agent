@@ -23,6 +23,7 @@ type StartCommand struct {
 	SessionID string
 	OwnerID   string
 	Query     string
+	AgentType string // "react" | "plan_solve"
 }
 
 // Dispatcher 持有并发闸与运行时协作者。
@@ -62,8 +63,12 @@ func (d *Dispatcher) Admit() (release func(), ok bool) {
 // ctx 为 run 上下文（含超时、随客户端断开取消）。finishRun 用脱离取消的上下文，
 // 保证即便客户端断开也能写回终态。
 func (d *Dispatcher) Run(ctx context.Context, cmd StartCommand, sink stream.Sink) error {
+	agentType := cmd.AgentType
+	if agentType == "" {
+		agentType = "react"
+	}
 	if err := d.runs.CreateRun(ctx, store.CreateRunParams{
-		RunID: cmd.RunID, SessionID: cmd.SessionID, OwnerID: cmd.OwnerID, EntryAgent: "react", QueryText: cmd.Query,
+		RunID: cmd.RunID, SessionID: cmd.SessionID, OwnerID: cmd.OwnerID, EntryAgent: agentType, QueryText: cmd.Query,
 	}); err != nil {
 		return err
 	}
@@ -71,7 +76,7 @@ func (d *Dispatcher) Run(ctx context.Context, cmd StartCommand, sink stream.Sink
 	finCtx := context.WithoutCancel(ctx)
 
 	st, err := d.client.RunAgent(ctx, cognition.RunRequest{
-		RunID: cmd.RunID, SessionID: cmd.SessionID, Query: cmd.Query, AgentType: "react", MaxSteps: d.maxSteps,
+		RunID: cmd.RunID, SessionID: cmd.SessionID, Query: cmd.Query, AgentType: agentType, MaxSteps: d.maxSteps,
 	})
 	if err != nil {
 		_ = d.runs.FinishRun(finCtx, store.FinishRunParams{RunID: cmd.RunID, Status: store.StatusFailed, ErrorMsg: err.Error()})

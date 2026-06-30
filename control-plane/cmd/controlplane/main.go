@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"my-agent/control-plane/internal/api"
+	"my-agent/control-plane/internal/artifact"
 	"my-agent/control-plane/internal/cognition"
 	"my-agent/control-plane/internal/config"
 	"my-agent/control-plane/internal/dispatch"
@@ -44,9 +45,20 @@ func main() {
 
 	runs := store.NewRunRepository(pool)
 	events := store.NewEventRepository(pool)
+
+	artStore, err := artifact.NewMinioStore(cfg.MinioEndpoint, cfg.MinioAccessKey, cfg.MinioSecretKey, cfg.MinioBucket, cfg.MinioUseSSL)
+	if err != nil {
+		log.Error("minio client", "err", err)
+		os.Exit(1)
+	}
+	// 桶不可用不致命：仅 /artifacts 受影响，ReAct/Plan-Execute 主链路照常。
+	if err := artStore.EnsureBucket(ctx); err != nil {
+		log.Warn("minio bucket ensure failed; artifacts unavailable", "err", err)
+	}
+
 	hub := stream.NewHub(events, cfg.HeartbeatInterval, log)
 	dispatcher := dispatch.New(cfg.MaxConcurrentRuns, runs, client, hub, cfg.MaxSteps, log)
-	router := api.NewRouter(dispatcher, runs, events, cfg.RunTimeout, log)
+	router := api.NewRouter(dispatcher, runs, events, artStore, cfg.RunTimeout, log)
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: router}
 
