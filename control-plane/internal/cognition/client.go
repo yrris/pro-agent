@@ -48,6 +48,11 @@ func Dial(addr string) (Client, error) {
 	return &grpcClient{conn: conn, svc: agentv1.NewCognitionServiceClient(conn)}, nil
 }
 
+// NewClient 基于已有连接构造客户端（用于依赖注入/测试，如 bufconn）。
+func NewClient(cc grpc.ClientConnInterface) Client {
+	return &grpcClient{svc: agentv1.NewCognitionServiceClient(cc)}
+}
+
 func (c *grpcClient) RunAgent(ctx context.Context, req RunRequest) (Stream, error) {
 	agentType := req.AgentType
 	if agentType == "" {
@@ -67,7 +72,12 @@ func (c *grpcClient) RunAgent(ctx context.Context, req RunRequest) (Stream, erro
 	return &grpcStream{s: s}, nil
 }
 
-func (c *grpcClient) Close() error { return c.conn.Close() }
+func (c *grpcClient) Close() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+	return nil
+}
 
 type grpcStream struct {
 	s grpc.ServerStreamingClient[agentv1.Event]
