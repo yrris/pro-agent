@@ -1,0 +1,33 @@
+[project]
+name = "my-agent-cognition"
+version = "0.1.0"
+description = "my-agent 认知面：LangGraph 编排 + Agentic RAG + 工具/技能/记忆/模型路由"
+requires-python = ">=3.12"
+
+# 依赖在各里程碑落地时启用并锁定版本；此处声明计划内主要依赖与用途。
+dependencies = [
+    "langgraph>=0.2",              # 编排：图 / checkpoint / Send 扇出 / interrupt / Store
+    "langgraph-checkpoint-postgres>=2.0",  # PostgreSQL checkpointer（可恢复执行/状态）
+    "langchain-core>=0.3",         # 工具/消息抽象
+    "fastapi>=0.115",              # 服务外壳
+    "uvicorn>=0.30",
+    "grpcio>=1.66",                # 对 Go 控制面的 gRPC 流式
+    "grpcio-tools>=1.66",
+    "qdrant-client>=1.12",         # 向量库：dense + sparse 混合检索
+    "mcp>=1.0",                    # MCP 官方 Python SDK（三传输）
+    "psycopg[binary]>=3.2",        # PostgreSQL 驱动
+    "pydantic>=2.9",               # State / 事件 schema
+    "httpx>=0.27",                 # 外部 HTTP（rerank / 生图 等）
+    "anthropic>=0.39",             # Claude
+    "openai>=1.50",                # DeepSeek（OpenAI 兼容）/ 可选生图
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

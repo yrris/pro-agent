@@ -1,0 +1,85 @@
+# my-agent 基础依赖编排：全部官方镜像，均可在 Docker 中运行。
+# 用法：cp .env.example .env && docker compose up -d
+# 说明：本阶段只起“基础设施依赖”；控制面/认知面/前端的服务在各里程碑落地后再加入本文件。
+
+services:
+  postgres:
+    # 业务数据 + 执行事件账本 + LangGraph checkpoint
+    image: postgres:16
+    container_name: my-agent-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent_pwd}
+      POSTGRES_DB: ${POSTGRES_DB:-my_agent}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ./volumes/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  qdrant:
+    # 向量库：dense + sparse 混合检索
+    image: qdrant/qdrant:v1.12.4
+    container_name: my-agent-qdrant
+    ports:
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - ./volumes/qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    # 缓存 / 限流 / 流式 pub-sub 扇出
+    image: redis:7-alpine
+    container_name: my-agent-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - ./volumes/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    # 对象存储：artifact 文件（报告/图片/脚本产物）
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    container_name: my-agent-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - ./volumes/minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nats:
+    # 事件总线（为 Proactive 连接器/事件驱动预留；开启 JetStream 持久化）
+    image: nats:2.10-alpine
+    container_name: my-agent-nats
+    command: ["-js", "-sd", "/data"]
+    ports:
+      - "${NATS_PORT:-4222}:4222"
+    volumes:
+      - ./volumes/nats:/data
+
+networks:
+  default:
+    name: my-agent-net
