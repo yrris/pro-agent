@@ -1,0 +1,88 @@
+// Package dispatch 负责 run 的准入（有界并发 + 背压）与生命周期编排：
+// 准入成功后 createRun → 打开认知流 → 由 stream.Hub 泵送 → finishRun。
+package dispatch
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+
+	"golang.org/x/sync/semaphore"
+
+	"my-agent/control-plane/internal/cognition"
+	"my-agent/control-plane/internal/store"
+	"my-agent/control-plane/internal/stream"
+)
+
+// ErrBusy 表示并发已达上限（背压）。上层应回 429“系统繁忙”。
+var ErrBusy = errors.New("dispatch: system busy")
+
+// StartCommand 是一次 run 的启动入参。
+type StartCommand struct {
+	RunID     string
+	SessionID string
+	OwnerID   string
+	Query     string
+}
+
+// Dispatcher 持有并发闸与运行时协作者。
+type Dispatcher struct {
+	sem      *semaphore.Weighted
+	runs     store.RunRepository
+	client   cognition.Client
+	hub      *stream.Hub
+	maxSteps int32
+	log      *slog.Logger
+}
+
+func New(maxConcurrent int64, runs store.RunRepository, client cognition.Client, hub *stream.Hub, maxSteps int32, log *slog.Logger) *Dispatcher {
+	if maxConcurrent <= 0 {
+		maxConcurrent = 16
+	}
+	return &Dispatcher{
+		sem:      semaphore.NewWeighted(maxConcurrent),
+		runs:     runs,
+		client:   client,
+		hub:      hub,
+		maxSteps: maxSteps,
+		log:      log,
+	}
+}
+
+// Admit 非阻塞地尝试占用一个并发槽。成功返回释放函数；失败返回 (nil, false)。
+// 必须在写任何 SSE 响应头之前调用，以便满载时能干净地回 429。
+func (d *Dispatcher) Admit() (release func(), ok bool) {
+	if !d.sem.TryAcquire(1) {
+		return nil, false
+	}
+	return func() { d.sem.Release(1) }, true
+}
+
+// Run 执行一次“已准入”的 run：建 run → 打开认知流 → 泵送 → 收口。
+// ctx 为 run 上下文（含超时、随客户端断开取消）。finishRun 用脱离取消的上下文，
+// 保证即便客户端断开也能写回终态。
+func (d *Dispatcher) Run(ctx context.Context, cmd StartCommand, sink stream.Sink) error {
+	if err := d.runs.CreateRun(ctx, store.CreateRunParams{
+		RunID: cmd.RunID, SessionID: cmd.SessionID, OwnerID: cmd.OwnerID, EntryAgent: "react", QueryText: cmd.Query,
+	}); err != nil {
+		return err
+	}
+
+	finCtx := context.WithoutCancel(ctx)
+
+	st, err := d.client.RunAgent(ctx, cognition.RunRequest{
+		RunID: cmd.RunID, SessionID: cmd.SessionID, Query: cmd.Query, AgentType: "react", MaxSteps: d.maxSteps,
+	})
+	if err != nil {
+		_ = d.runs.FinishRun(finCtx, store.FinishRunParams{RunID: cmd.RunID, Status: store.StatusFailed, ErrorMsg: err.Error()})
+		return err
+	}
+
+	res := d.hub.Pump(ctx, cmd.RunID, st, sink)
+	if ferr := d.runs.FinishRun(finCtx, store.FinishRunParams{
+		RunID: cmd.RunID, Status: res.Status, FinalSummaryText: res.Summary, ErrorMsg: res.ErrorMsg,
+	}); ferr != nil && d.log != nil {
+		d.log.Error("finish run failed", "runID", cmd.RunID, "err", ferr)
+	}
+	return nil
+}
