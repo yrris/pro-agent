@@ -36,7 +36,7 @@ func Load() Config {
 		MinioEndpoint:     env("MINIO_ENDPOINT", "localhost:9000"),
 		MinioAccessKey:    env("MINIO_ACCESS_KEY", "minioadmin"),
 		MinioSecretKey:    env("MINIO_SECRET_KEY", "minioadmin"),
-		MinioBucket:       env("MINIO_BUCKET", "my-agent-artifacts"),
+		MinioBucket:       env("MINIO_BUCKET", "artifacts"), // 须与认知面 COGNITION_MINIO_BUCKET 一致
 		MinioUseSSL:       env("MINIO_USE_SSL", "false") == "true",
 	}
 }
