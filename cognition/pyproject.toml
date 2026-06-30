@@ -14,6 +14,7 @@ dependencies = [
     "grpcio>=1.66",                # 对 Go 控制面的 gRPC 流式
     "grpcio-tools>=1.66",
     "qdrant-client>=1.12",         # 向量库：dense + sparse 混合检索
+    "minio>=7.2",                  # 对象存储客户端：artifact 产物落 MinIO
     "mcp>=1.0",                    # MCP 官方 Python SDK（三传输）
     "psycopg[binary]>=3.2",        # PostgreSQL 驱动
     "pydantic>=2.9",               # State / 事件 schema

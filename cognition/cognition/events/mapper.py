@@ -1,29 +1,23 @@
 """把 LangGraph `astream_events(version="v2")` 事件确定性映射成共享 schema Event。
 
-约定（务必与契约一致）：
-- 用 run_id（= RunRequest.run_id，图级 run 身份）做 Event.run_id 与 think 消息 id；
-  astream_events 自带的 run_id 是每次 LLM/工具调用的 id，不是图级 run id，这里不用它。
-- seq 每 run 单调、无空洞、从 1。
-- think 步序自增计数：每次 on_chat_model_start(node="agent") +1，作为该轮 thought 的 step
-  与 message_id 后缀。
+M1（ReAct）规则不变：agent 节点的 on_chat_model_* → tool_thought；on_chat_model_end 带
+tool_calls → tool_call(running)，无 tool_calls → result(finish)；tools 节点 on_tool_end →
+tool_call(success/failed) + tool_result。
 
-映射规则：
-- on_chat_model_start(agent) → 开 tool_thought（is_final=False），message_id=f"{run_id}:think:{step}"。
-- on_chat_model_stream(agent) → tool_thought 增量（is_final=False，同 message_id，delta 文本）；
-  空文本块跳过。
-- on_chat_model_end(agent)：
-  * 有 tool_calls → (a) 封口 tool_thought（is_final=True）；
-    (b) 每个 tool_call 发 tool_call(status=running, is_final=False, message_id==tool_call_id,
-        tool_provider="local", input=args, dispatch_index 本轮从 1 起, summary="正在调用 {name}")。
-  * 无 tool_calls → 发 result(finish=True, is_final=True, text=AIMessage content)。
-- on_tool_end(tools)：按 ToolMessage.tool_call_id 匹配 running 的 tool_call：
-  * status != "error" → tool_call(status=success, is_final=True, summary="{name} 调用完成")
-    然后 tool_result(is_final=True, tool_result=observation, artifact_refs 来自 ToolMessage.artifact)。
-  * status == "error" → tool_call(status=failed, is_final=True, error_msg, summary="{name} 调用失败")
-    然后 tool_result(is_final=True, tool_result=error 文本)（保证回放完整）。
+M2（Plan-Execute）加性扩展——按 `metadata.langgraph_node`（及子图注入的 `branch_id`）区分：
+- **planner 节点**的 on_chat_model_* → **plan_thought**（带 plannerRoundId，每个 planner round 稳定）；
+  planner 的 tool_calls（planning）不产出 tool_call 事件，仅封口 thought。
+- **自定义事件**（节点内 `adispatch_custom_event`）：
+  - name="plan" → **plan** 快照（PlanPayload，复用当前 plannerRoundId）。
+  - name="task" → **task**（TaskPayload，**无** plannerRoundId）。
+  - name="result" → **result**（finish=True，整 run 终态，恰一次）。
+- **executor（ReAct 子图，节点 agent/tools，metadata 带 branch_id）**：仍产出 tool_thought /
+  tool_call / tool_result，但：
+  - think/tool 的 message_id、tool_call_id 都按 branch_id **命名空间化**（并行共用 fake 模型也不撞 id）；
+  - 子任务最终答复（无 tool_calls）**不**产出 result/finish（终态 result 只由 summary 的自定义事件给出）。
 
-保证：seq 单调无空洞；finish=True 恰好一次且仅在 result；tool_call 的 running 与
-success/failed 共享同一个 tool_call_id（作为 message_id）。
+不变量：seq 每 run 单调、无空洞、从 1（并行事件按到达序分配）；finish=True 恰好一次且仅在 result；
+tool_call 的 running 与 success/failed 共享同一（命名空间化的）tool_call_id。
 """
 
 from __future__ import annotations
@@ -34,7 +28,9 @@ from cognition.events.schema import (
     ArtifactRef,
     Event,
     EventType,
+    PlanPayload,
     ResultPayload,
+    TaskPayload,
     ThoughtPayload,
     ToolCallStatus,
     ToolPayload,
@@ -44,6 +40,7 @@ from cognition.providers.reasoning import extract_text_delta
 
 _AGENT_NODE = "agent"
 _TOOLS_NODE = "tools"
+_PLANNER_NODE = "planner"
 
 
 class EventMapper:
@@ -52,108 +49,249 @@ class EventMapper:
     def __init__(self, run_id: str) -> None:
         self.run_id = run_id
         self._seq = 0
-        self._think_step = 0           # think 轮计数（1 起）
-        self._dispatch_index = 0       # 当前 think 轮内工具序（1 起，每轮重置）
-        self._current_think_mid = ""   # 当前 think 轮的 message_id
-        # tool_call_id -> {"name": str, "dispatch_index": int, "step": int}
+        self._finished = False
+
+        # planner round 追踪（planner 非并行，单槽即可）。
+        self._planner_round = 0
+        self._planner_round_id = ""
+        self._planner_think_mid = ""
+
+        # executor（per-branch）think 追踪：branch -> 状态。branch "" 表示独立 ReAct（M1）。
+        self._branch_think_step: dict[str, int] = {}
+        self._branch_think_mid: dict[str, str] = {}
+        self._branch_dispatch: dict[str, int] = {}
+
+        # 进行中的工具调用，键为命名空间化后的 tool_call_id。
         self._running: dict[str, dict[str, Any]] = {}
-        self._finished = False         # finish 是否已发出（保证恰好一次）
+
+        # task 序号（保证 task 的 message_id 唯一）。
+        self._task_no = 0
 
     # —— 内部小工具 ——
     def _next_seq(self) -> int:
         self._seq += 1
         return self._seq
 
-    def _think_mid(self) -> str:
-        return f"{self.run_id}:think:{self._think_step}"
+    @staticmethod
+    def _norm_branch(branch: Any) -> str:
+        return str(branch) if branch else ""
+
+    def _ns_tcid(self, branch: str, tcid: str) -> str:
+        return f"{branch}:{tcid}" if branch else tcid
+
+    def _exec_think_mid(self, branch: str, step: int) -> str:
+        return f"{self.run_id}:{branch}:think:{step}" if branch else f"{self.run_id}:think:{step}"
 
     # —— 主入口 ——
     def handle(self, event: dict) -> list[Event]:
         """消费一个 astream_events v2 事件，返回 0..N 个 schema Event。"""
         et = event.get("event")
-        node = (event.get("metadata") or {}).get("langgraph_node")
+        md = event.get("metadata") or {}
+        node = md.get("langgraph_node")
 
-        if et == "on_chat_model_start" and node == _AGENT_NODE:
-            return self._on_chat_start()
-        if et == "on_chat_model_stream" and node == _AGENT_NODE:
-            return self._on_chat_stream(event)
-        if et == "on_chat_model_end" and node == _AGENT_NODE:
-            return self._on_chat_end(event)
-        if et == "on_tool_end" and node == _TOOLS_NODE:
-            return self._on_tool_end(event)
+        if et == "on_custom_event":
+            name = event.get("name")
+            if name == "plan":
+                return self._on_plan(event)
+            if name == "task":
+                return self._on_task(event)
+            if name == "result":
+                return self._on_result(event)
+            return []
+
+        if node == _PLANNER_NODE:
+            if et == "on_chat_model_start":
+                return self._on_planner_start()
+            if et == "on_chat_model_stream":
+                return self._on_planner_stream(event)
+            if et == "on_chat_model_end":
+                return self._on_planner_end()
+            return []
+
+        if node == _AGENT_NODE:
+            branch = self._norm_branch(md.get("branch_id"))
+            if et == "on_chat_model_start":
+                return self._on_exec_start(branch)
+            if et == "on_chat_model_stream":
+                return self._on_exec_stream(event, branch)
+            if et == "on_chat_model_end":
+                return self._on_exec_end(event, branch)
+            return []
+
+        if node == _TOOLS_NODE and et == "on_tool_end":
+            branch = self._norm_branch(md.get("branch_id"))
+            return self._on_tool_end(event, branch)
+
         return []
 
-    # —— 各事件处理 ——
-    def _on_chat_start(self) -> list[Event]:
-        self._think_step += 1
-        self._dispatch_index = 0
-        self._current_think_mid = self._think_mid()
+    # ——————————————————————————————————————————————————————————
+    # planner → plan_thought
+    # ——————————————————————————————————————————————————————————
+    def _on_planner_start(self) -> list[Event]:
+        self._planner_round += 1
+        self._planner_round_id = f"{self.run_id}:planner:{self._planner_round}"
+        self._planner_think_mid = f"{self.run_id}:plan_thought:{self._planner_round}"
         return [
             Event(
                 seq=self._next_seq(),
                 run_id=self.run_id,
-                message_id=self._current_think_mid,
-                type=EventType.TOOL_THOUGHT,
+                message_id=self._planner_think_mid,
+                type=EventType.PLAN_THOUGHT,
                 ts_unix_ms=now_unix_ms(),
                 is_final=False,
-                finish=False,
-                step=str(self._think_step),
-                tool_thought=ThoughtPayload(text=""),
+                step=str(self._planner_round),
+                tool_thought=ThoughtPayload(text="", planner_round_id=self._planner_round_id),
             )
         ]
 
-    def _on_chat_stream(self, event: dict) -> list[Event]:
-        chunk = (event.get("data") or {}).get("chunk")
-        text = extract_text_delta(chunk)
+    def _on_planner_stream(self, event: dict) -> list[Event]:
+        text = extract_text_delta((event.get("data") or {}).get("chunk"))
         if not text:
             return []
         return [
             Event(
                 seq=self._next_seq(),
                 run_id=self.run_id,
-                message_id=self._current_think_mid or self._think_mid(),
+                message_id=self._planner_think_mid,
+                type=EventType.PLAN_THOUGHT,
+                ts_unix_ms=now_unix_ms(),
+                is_final=False,
+                step=str(self._planner_round),
+                tool_thought=ThoughtPayload(text=text, planner_round_id=self._planner_round_id),
+            )
+        ]
+
+    def _on_planner_end(self) -> list[Event]:
+        # planner 的 tool_calls（planning）不产出 tool_call；仅封口 thought。
+        return [
+            Event(
+                seq=self._next_seq(),
+                run_id=self.run_id,
+                message_id=self._planner_think_mid or f"{self.run_id}:plan_thought:{self._planner_round}",
+                type=EventType.PLAN_THOUGHT,
+                ts_unix_ms=now_unix_ms(),
+                is_final=True,
+                step=str(self._planner_round),
+                tool_thought=ThoughtPayload(text="", planner_round_id=self._planner_round_id),
+            )
+        ]
+
+    # ——————————————————————————————————————————————————————————
+    # 自定义事件 → plan / task / result
+    # ——————————————————————————————————————————————————————————
+    def _on_plan(self, event: dict) -> list[Event]:
+        data = event.get("data") or {}
+        return [
+            Event(
+                seq=self._next_seq(),
+                run_id=self.run_id,
+                message_id=f"{self.run_id}:plan:{self._planner_round}",
+                type=EventType.PLAN,
+                ts_unix_ms=now_unix_ms(),
+                is_final=True,
+                step=str(self._planner_round),
+                plan=PlanPayload(
+                    title=str(data.get("title", "")),
+                    steps=list(data.get("steps", []) or []),
+                    step_status=list(data.get("step_status", []) or []),
+                    notes=list(data.get("notes", []) or []),
+                    planner_round_id=self._planner_round_id,
+                ),
+            )
+        ]
+
+    def _on_task(self, event: dict) -> list[Event]:
+        data = event.get("data") or {}
+        self._task_no += 1
+        return [
+            Event(
+                seq=self._next_seq(),
+                run_id=self.run_id,
+                message_id=f"{self.run_id}:task:{self._task_no}",
+                type=EventType.TASK,
+                ts_unix_ms=now_unix_ms(),
+                is_final=True,
+                step=str(self._planner_round),
+                task=TaskPayload(text=str(data.get("text", ""))),
+            )
+        ]
+
+    def _on_result(self, event: dict) -> list[Event]:
+        data = event.get("data") or {}
+        return [self._make_result(str(data.get("text", "")))]
+
+    # ——————————————————————————————————————————————————————————
+    # executor（ReAct 子图）→ tool_thought / tool_call / tool_result
+    # ——————————————————————————————————————————————————————————
+    def _on_exec_start(self, branch: str) -> list[Event]:
+        step = self._branch_think_step.get(branch, 0) + 1
+        self._branch_think_step[branch] = step
+        self._branch_dispatch[branch] = 0
+        mid = self._exec_think_mid(branch, step)
+        self._branch_think_mid[branch] = mid
+        return [
+            Event(
+                seq=self._next_seq(),
+                run_id=self.run_id,
+                message_id=mid,
                 type=EventType.TOOL_THOUGHT,
                 ts_unix_ms=now_unix_ms(),
                 is_final=False,
-                finish=False,
-                step=str(self._think_step),
+                step=str(step),
+                tool_thought=ThoughtPayload(text=""),
+            )
+        ]
+
+    def _on_exec_stream(self, event: dict, branch: str) -> list[Event]:
+        text = extract_text_delta((event.get("data") or {}).get("chunk"))
+        if not text:
+            return []
+        step = self._branch_think_step.get(branch, 0)
+        mid = self._branch_think_mid.get(branch) or self._exec_think_mid(branch, step)
+        return [
+            Event(
+                seq=self._next_seq(),
+                run_id=self.run_id,
+                message_id=mid,
+                type=EventType.TOOL_THOUGHT,
+                ts_unix_ms=now_unix_ms(),
+                is_final=False,
+                step=str(step),
                 tool_thought=ThoughtPayload(text=text),
             )
         ]
 
-    def _on_chat_end(self, event: dict) -> list[Event]:
+    def _on_exec_end(self, event: dict, branch: str) -> list[Event]:
         out = (event.get("data") or {}).get("output")
         tool_calls = list(getattr(out, "tool_calls", None) or [])
+        step = self._branch_think_step.get(branch, 0)
+        mid = self._branch_think_mid.get(branch) or self._exec_think_mid(branch, step)
         events: list[Event] = []
 
         if tool_calls:
-            # (a) 封口当前 thought
+            # 封口当前 thought。
             events.append(
                 Event(
                     seq=self._next_seq(),
                     run_id=self.run_id,
-                    message_id=self._current_think_mid or self._think_mid(),
+                    message_id=mid,
                     type=EventType.TOOL_THOUGHT,
                     ts_unix_ms=now_unix_ms(),
                     is_final=True,
-                    finish=False,
-                    step=str(self._think_step),
+                    step=str(step),
                     tool_thought=ThoughtPayload(text=""),
                 )
             )
-            # (b) 逐个 tool_call(running)
             for tc in tool_calls:
-                tcid = str(tc.get("id") or "")
+                raw = str(tc.get("id") or "")
                 name = str(tc.get("name") or "")
                 args = tc.get("args") or {}
                 if not isinstance(args, dict):
                     args = {}
-                self._dispatch_index += 1
-                self._running[tcid] = {
-                    "name": name,
-                    "dispatch_index": self._dispatch_index,
-                    "step": self._think_step,
-                }
+                tcid = self._ns_tcid(branch, raw)
+                self._branch_dispatch[branch] = self._branch_dispatch.get(branch, 0) + 1
+                di = self._branch_dispatch[branch]
+                self._running[tcid] = {"name": name, "dispatch_index": di, "step": step}
                 events.append(
                     Event(
                         seq=self._next_seq(),
@@ -162,14 +300,13 @@ class EventMapper:
                         type=EventType.TOOL_CALL,
                         ts_unix_ms=now_unix_ms(),
                         is_final=False,
-                        finish=False,
-                        step=str(self._think_step),
+                        step=str(step),
                         tool_call=ToolPayload(
                             tool_call_id=tcid,
                             tool_name=name,
                             tool_provider="local",
                             status=ToolCallStatus.RUNNING,
-                            dispatch_index=self._dispatch_index,
+                            dispatch_index=di,
                             input=args,
                             summary=f"正在调用 {name}",
                         ),
@@ -177,25 +314,39 @@ class EventMapper:
                 )
             return events
 
-        # 无 tool_calls → 终态 result
-        text = extract_text_delta(out)
-        events.append(self._make_result(text))
+        # 无 tool_calls：分支内（branch 非空）= 子任务最终答复，不产出 result；
+        # 独立 ReAct（branch 为空，M1）= 终态 result(finish)。
+        if branch:
+            events.append(
+                Event(
+                    seq=self._next_seq(),
+                    run_id=self.run_id,
+                    message_id=mid,
+                    type=EventType.TOOL_THOUGHT,
+                    ts_unix_ms=now_unix_ms(),
+                    is_final=True,
+                    step=str(step),
+                    tool_thought=ThoughtPayload(text=""),
+                )
+            )
+            return events
+        events.append(self._make_result(extract_text_delta(out)))
         return events
 
-    def _on_tool_end(self, event: dict) -> list[Event]:
+    def _on_tool_end(self, event: dict, branch: str) -> list[Event]:
         out = (event.get("data") or {}).get("output")
-        tcid = str(getattr(out, "tool_call_id", "") or "")
+        raw = str(getattr(out, "tool_call_id", "") or "")
+        tcid = self._ns_tcid(branch, raw)
         info = self._running.get(tcid, {})
         name = str(info.get("name") or getattr(out, "name", "") or "")
         dispatch_index = int(info.get("dispatch_index", 0))
-        step = str(info.get("step", self._think_step))
+        step = str(info.get("step", self._branch_think_step.get(branch, 0)))
         status = getattr(out, "status", "success")
         content = getattr(out, "content", "")
         observation = content if isinstance(content, str) else str(content)
         artifact = getattr(out, "artifact", None)
 
         events: list[Event] = []
-
         if status == "error":
             events.append(
                 Event(
@@ -205,7 +356,6 @@ class EventMapper:
                     type=EventType.TOOL_CALL,
                     ts_unix_ms=now_unix_ms(),
                     is_final=True,
-                    finish=False,
                     step=step,
                     tool_call=ToolPayload(
                         tool_call_id=tcid,
@@ -226,7 +376,6 @@ class EventMapper:
                     type=EventType.TOOL_RESULT,
                     ts_unix_ms=now_unix_ms(),
                     is_final=True,
-                    finish=False,
                     step=step,
                     tool_result=ToolPayload(
                         tool_call_id=tcid,
@@ -246,7 +395,6 @@ class EventMapper:
                     type=EventType.TOOL_CALL,
                     ts_unix_ms=now_unix_ms(),
                     is_final=True,
-                    finish=False,
                     step=step,
                     tool_call=ToolPayload(
                         tool_call_id=tcid,
@@ -266,7 +414,6 @@ class EventMapper:
                     type=EventType.TOOL_RESULT,
                     ts_unix_ms=now_unix_ms(),
                     is_final=True,
-                    finish=False,
                     step=step,
                     tool_result=ToolPayload(
                         tool_call_id=tcid,
@@ -293,7 +440,7 @@ class EventMapper:
             ts_unix_ms=now_unix_ms(),
             is_final=True,
             finish=True,
-            step=str(self._think_step),
+            step="result",
             result=ResultPayload(text=text),
         )
 
@@ -303,7 +450,7 @@ class EventMapper:
 
 
 def _coerce_artifacts(artifact: Any) -> list[ArtifactRef]:
-    """把 ToolMessage.artifact 尽力转成 ArtifactRef 列表（M1 一般为空）。"""
+    """把 ToolMessage.artifact 尽力转成 ArtifactRef 列表。"""
     if not artifact:
         return []
     items = artifact if isinstance(artifact, list) else [artifact]

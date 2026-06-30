@@ -1,9 +1,16 @@
 """共享事件契约 v1 的 pydantic 镜像（与 proto/agent/v1/agent.proto 一致）。
 
-类型：tool_thought | tool_call | tool_result | result。
+类型：tool_thought | tool_call | tool_result | result
+      | plan_thought | plan | task（Plan-Execute 加性扩展，仍 v1，线兼容）。
 不变量：finish 仅 RESULT 为 true（整 run 终态，恰好一次）；is_final 是单条消息终态。
 `Event.to_proto()` 转换为生成的 proto 消息——在方法内**延迟** import 生成模块，
 以便纯逻辑测试无需 genproto。
+
+Plan-Execute 扩展要点（镜像已提交的 Go 契约）：
+- plan_thought 复用 `tool_thought`（ThoughtPayload）oneof 槽，由 `Event.type` 区分；
+  ThoughtPayload 增加 `planner_round_id`（仅 plan_thought 填写，executor 的 tool_thought 留空）。
+- plan → PlanPayload{title, steps, step_status, notes, planner_round_id}；plan 事件 is_final=True。
+- task → TaskPayload{text}（无 planner_round_id）；task 事件 is_final=True。
 """
 
 from __future__ import annotations
@@ -30,6 +37,10 @@ class EventType(str, Enum):
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
     RESULT = "result"
+    # —— Plan-Execute 加性扩展 ——
+    PLAN_THOUGHT = "plan_thought"  # 规划器思考（复用 ThoughtPayload + planner_round_id）
+    PLAN = "plan"                  # 计划快照（PlanPayload）
+    TASK = "task"                  # 单个 <sep> 子任务（TaskPayload）
 
 
 class ToolCallStatus(str, Enum):
@@ -54,7 +65,28 @@ class ArtifactRef(BaseModel):
 
 
 class ThoughtPayload(BaseModel):
-    """tool_thought 载荷。"""
+    """tool_thought / plan_thought 复用的载荷。
+
+    `planner_round_id` 仅 plan_thought 填写（同一 planner round 的 thought/plan 共享），
+    executor 的 tool_thought 留空。
+    """
+
+    text: str = ""
+    planner_round_id: str = ""
+
+
+class PlanPayload(BaseModel):
+    """plan 事件载荷：计划快照（steps/step_status/notes 并行索引）。"""
+
+    title: str = ""
+    steps: list[str] = Field(default_factory=list)
+    step_status: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    planner_round_id: str = ""
+
+
+class TaskPayload(BaseModel):
+    """task 事件载荷：单个 <sep> 子任务文本（无 planner_round_id）。"""
 
     text: str = ""
 
@@ -94,10 +126,13 @@ class Event(BaseModel):
     step: str = ""                # ReAct 步序/节点名（可观测）
 
     # oneof payload —— 按 type 设置其一
+    # 注意：plan_thought 复用 tool_thought 槽（与 proto/Go 契约一致），由 type 区分。
     tool_thought: Optional[ThoughtPayload] = None
     tool_call: Optional[ToolPayload] = None
     tool_result: Optional[ToolPayload] = None
     result: Optional[ResultPayload] = None
+    plan: Optional[PlanPayload] = None
+    task: Optional[TaskPayload] = None
 
     @model_validator(mode="after")
     def _check_invariants(self) -> "Event":
@@ -110,9 +145,16 @@ class Event(BaseModel):
             EventType.TOOL_CALL: self.tool_call,
             EventType.TOOL_RESULT: self.tool_result,
             EventType.RESULT: self.result,
+            # plan_thought 复用 tool_thought 槽（与 Go 的 oneof 一致）。
+            EventType.PLAN_THOUGHT: self.tool_thought,
+            EventType.PLAN: self.plan,
+            EventType.TASK: self.task,
         }[self.type]
         if expected is None:
             raise ValueError(f"event type {self.type.value} requires its matching payload")
+        # 镜像 Go Validate：plan / task 为单条终态（is_final=True）。
+        if self.type in (EventType.PLAN, EventType.TASK) and not self.is_final:
+            raise ValueError(f"event type {self.type.value} must have is_final=True")
         return self
 
     # ——————————————————————————————————————————————————————————————
@@ -127,6 +169,9 @@ class Event(BaseModel):
             EventType.TOOL_CALL: pb.EVENT_TYPE_TOOL_CALL,
             EventType.TOOL_RESULT: pb.EVENT_TYPE_TOOL_RESULT,
             EventType.RESULT: pb.EVENT_TYPE_RESULT,
+            EventType.PLAN_THOUGHT: pb.EVENT_TYPE_PLAN_THOUGHT,
+            EventType.PLAN: pb.EVENT_TYPE_PLAN,
+            EventType.TASK: pb.EVENT_TYPE_TASK,
         }
 
         proto = pb.Event(
@@ -142,6 +187,26 @@ class Event(BaseModel):
 
         if self.type is EventType.TOOL_THOUGHT and self.tool_thought is not None:
             proto.tool_thought.CopyFrom(pb.ThoughtPayload(text=self.tool_thought.text))
+        elif self.type is EventType.PLAN_THOUGHT and self.tool_thought is not None:
+            # plan_thought 复用 tool_thought oneof 槽，带上 planner_round_id。
+            proto.tool_thought.CopyFrom(
+                pb.ThoughtPayload(
+                    text=self.tool_thought.text,
+                    planner_round_id=self.tool_thought.planner_round_id,
+                )
+            )
+        elif self.type is EventType.PLAN and self.plan is not None:
+            proto.plan.CopyFrom(
+                pb.PlanPayload(
+                    title=self.plan.title,
+                    steps=list(self.plan.steps),
+                    step_status=list(self.plan.step_status),
+                    notes=list(self.plan.notes),
+                    planner_round_id=self.plan.planner_round_id,
+                )
+            )
+        elif self.type is EventType.TASK and self.task is not None:
+            proto.task.CopyFrom(pb.TaskPayload(text=self.task.text))
         elif self.type is EventType.TOOL_CALL and self.tool_call is not None:
             proto.tool_call.CopyFrom(_tool_payload_to_proto(self.tool_call, pb))
         elif self.type is EventType.TOOL_RESULT and self.tool_result is not None:

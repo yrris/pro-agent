@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     anthropic_model: str = Field(default="claude-opus-4-8")
     deepseek_model: str = Field(default="deepseek-chat")
 
+    # —— 模型分层（M2）——
+    # planner / executor 各自的 provider+model；留空则回落到上面的单 provider 设置。
+    # 默认 deepseek（性价比）；owner 在最终集成时把 planner 切到 opus。
+    planner_provider: str | None = Field(default=None)  # "anthropic" | "deepseek"
+    planner_model: str | None = Field(default=None)
+    executor_provider: str | None = Field(default=None)
+    executor_model: str | None = Field(default=None)
+
     anthropic_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("COGNITION_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
@@ -53,6 +61,40 @@ class Settings(BaseSettings):
 
     # —— ReAct ——
     max_steps: int = Field(default=40, ge=1)
+
+    # —— Plan-Execute（M2）——
+    # 外层 plan→execute→replan 循环上限（镜像原项目 plannerMaxSteps，默认 5）。
+    planner_max_steps: int = Field(default=5, ge=1)
+    # 并行子任务宽度上限（镜像 maxParallelTasks，默认 2）。
+    max_parallel_tasks: int = Field(default=2, ge=1)
+    # 单个并行分支（executor 子图）的超时秒数。
+    branch_timeout_seconds: float = Field(default=120.0, gt=0)
+
+    # —— 产物对象存储（MinIO）——
+    # 默认与 deploy/.env 的 minio 对齐；上传是惰性/可降级的（无 MinIO 也能跑单测）。
+    minio_endpoint: str = Field(
+        default="localhost:9000",
+        validation_alias=AliasChoices("COGNITION_MINIO_ENDPOINT", "MINIO_ENDPOINT"),
+    )
+    minio_access_key: str = Field(
+        default="minioadmin",
+        validation_alias=AliasChoices(
+            "COGNITION_MINIO_ACCESS_KEY", "MINIO_ACCESS_KEY", "MINIO_ROOT_USER"
+        ),
+    )
+    minio_secret_key: str = Field(
+        default="minioadmin",
+        validation_alias=AliasChoices(
+            "COGNITION_MINIO_SECRET_KEY", "MINIO_SECRET_KEY", "MINIO_ROOT_PASSWORD"
+        ),
+    )
+    minio_bucket: str = Field(
+        default="artifacts",
+        validation_alias=AliasChoices("COGNITION_MINIO_BUCKET", "MINIO_BUCKET"),
+    )
+    minio_secure: bool = Field(default=False)
+    # 是否真正上传到 MinIO；默认 False → 单测/无 MinIO 环境只构造 ArtifactRef，不触网。
+    minio_upload_enabled: bool = Field(default=False)
 
     # 确定性脚本化模型开关：无需真实 LLM key 即可端到端验证（见 providers/fake.py）。
     fake_model: bool = Field(default=False)

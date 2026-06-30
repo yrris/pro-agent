@@ -41,4 +41,7 @@ def test_disallowed_name():
 
 def test_registry_exposes_calculator():
     tools = get_local_tools()
-    assert [t.name for t in tools] == ["calculator"]
+    names = [t.name for t in tools]
+    # M2：注册表新增 write_report（产物落 MinIO）；calculator 仍在。
+    assert "calculator" in names
+    assert "write_report" in names
