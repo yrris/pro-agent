@@ -18,32 +18,43 @@ import (
 
 	"my-agent/control-plane/internal/artifact"
 	"my-agent/control-plane/internal/dispatch"
+	"my-agent/control-plane/internal/event"
+	"my-agent/control-plane/internal/health"
 	"my-agent/control-plane/internal/store"
 )
 
 type handlers struct {
-	dispatcher *dispatch.Dispatcher
-	runs       store.RunRepository
-	events     store.EventRepository
-	artifacts  artifact.Store
-	runTimeout time.Duration
-	log        *slog.Logger
+	dispatcher   *dispatch.Dispatcher
+	runs         store.RunRepository
+	events       store.EventRepository
+	artifacts    artifact.Store
+	healthChecks map[string]health.Check
+	runTimeout   time.Duration
+	log          *slog.Logger
 }
 
-// NewRouter 装配路由与中间件。artifacts 可为 nil（仅 /artifacts 不可用）。
-func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, events store.EventRepository, artifacts artifact.Store, runTimeout time.Duration, log *slog.Logger) http.Handler {
-	h := &handlers{dispatcher: d, runs: runs, events: events, artifacts: artifacts, runTimeout: runTimeout, log: log}
+// NewRouter 装配路由与中间件。artifacts 可为 nil（仅 /artifacts 不可用）；
+// healthChecks 可为 nil（/healthz 退化为「进程存活即 200」）。
+func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, events store.EventRepository, artifacts artifact.Store, healthChecks map[string]health.Check, runTimeout time.Duration, log *slog.Logger) http.Handler {
+	h := &handlers{dispatcher: d, runs: runs, events: events, artifacts: artifacts, healthChecks: healthChecks, runTimeout: runTimeout, log: log}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
+	r.Get("/healthz", h.healthz)
 	r.Post("/runs", h.startRun)
 	r.Get("/runs/{runID}/events", h.replay)
 	r.Get("/artifacts/*", h.artifact)
 	return r
+}
+
+// healthz 并发探测已注入的依赖（PG / 认知面），聚合成单一判定。
+func (h *handlers) healthz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	rep := health.RunChecks(ctx, h.healthChecks)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(rep.HTTPStatus)
+	_ = json.NewEncoder(w).Encode(map[string]any{"healthy": rep.Healthy, "checks": rep.Body})
 }
 
 type startRunRequest struct {
@@ -115,6 +126,10 @@ func (h *handlers) replay(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeProblem(w, http.StatusInternalServerError, "internal", err.Error())
 		return
+	}
+	// 自证不变量：seq 无空洞、finish 仅 result 且至多一条。违反只告警、不阻断回放（可能是崩溃残留）。
+	if verr := event.ValidateSequence(envelopes); verr != nil {
+		h.log.Warn("replay sequence invariant violated", "runID", runID, "err", verr)
 	}
 
 	writeSSEHeaders(w)

@@ -21,6 +21,7 @@ from langchain_core.messages import HumanMessage
 from cognition._genproto import agent_pb2_grpc
 from cognition.config import Settings
 from cognition.events.mapper import EventMapper
+from cognition.observability.langfuse_seam import build_langfuse_callbacks
 
 logger = logging.getLogger(__name__)
 
@@ -74,23 +75,35 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
     async def Run(self, request, context):  # noqa: N802 (gRPC 方法名固定)
         run_id = request.run_id or "unknown"
         session_id = request.session_id or run_id
+        agent_type = request.agent_type or "react"
+        # 结构化日志：run_id/session_id/agent_type 关联键（与 Go 侧一致，跨进程串同一 run）。
+        log = logging.LoggerAdapter(
+            logger, {"run_id": run_id, "session_id": session_id, "agent_type": agent_type}
+        )
 
         mapper = EventMapper(run_id, self.tool_providers)
         graph, state, recursion = self._build(request)
+        metadata = {"request_id": run_id, "run_id": run_id, "session_id": session_id}
         config = {
             "configurable": {"thread_id": session_id},
             "recursion_limit": recursion,
-            # request_id 注入事件 metadata：write_report 等产物工具据此组 resource_key。
-            "metadata": {"request_id": run_id},
+            "metadata": metadata,
         }
+        # 可选 Langfuse trace（默认关、未装即 no-op）。
+        callbacks = build_langfuse_callbacks(self.settings)
+        if callbacks:
+            config["callbacks"] = callbacks
+            metadata["langfuse_session_id"] = session_id
 
+        log.info("run start")
         try:
             async for ev in graph.astream_events(state, version="v2", config=config):
                 for out in mapper.handle(ev):
                     yield out.to_proto()
+            log.info("run done")
         except asyncio.CancelledError:
-            logger.info("run %s cancelled", run_id)
+            log.info("run cancelled")
             raise
         except Exception as exc:  # noqa: BLE001 — 节点异常兜底，保证流干净关闭
-            logger.exception("run %s failed", run_id)
+            log.exception("run failed")
             yield mapper.error_result(str(exc)).to_proto()

@@ -16,6 +16,7 @@ import (
 	"my-agent/control-plane/internal/cognition"
 	"my-agent/control-plane/internal/config"
 	"my-agent/control-plane/internal/dispatch"
+	"my-agent/control-plane/internal/health"
 	"my-agent/control-plane/internal/store"
 	"my-agent/control-plane/internal/stream"
 )
@@ -58,7 +59,12 @@ func main() {
 
 	hub := stream.NewHub(events, cfg.HeartbeatInterval, log)
 	dispatcher := dispatch.New(cfg.MaxConcurrentRuns, runs, client, hub, cfg.MaxSteps, log)
-	router := api.NewRouter(dispatcher, runs, events, artStore, cfg.RunTimeout, log)
+	// 健康检查：PG ping + 认知面 grpc.health.v1（业务就绪）。
+	healthChecks := map[string]health.Check{
+		"postgres":  func(ctx context.Context) error { return pool.Ping(ctx) },
+		"cognition": client.HealthCheck,
+	}
+	router := api.NewRouter(dispatcher, runs, events, artStore, healthChecks, cfg.RunTimeout, log)
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: router}
 

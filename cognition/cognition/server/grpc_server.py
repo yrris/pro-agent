@@ -13,10 +13,12 @@ import logging
 import signal
 
 import grpc
+from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 
 from cognition._genproto import agent_pb2_grpc
 from cognition.checkpoint.postgres import build_checkpointer
 from cognition.config import Settings, get_settings
+from cognition.graphs.history import HistoryPolicy
 from cognition.graphs.plan_execute import build_plan_execute_graph
 from cognition.graphs.react import build_react_graph
 from cognition.providers.router import select_model
@@ -56,12 +58,20 @@ async def serve(settings: Settings | None = None) -> None:
         checkpointer, aclose = await build_checkpointer(settings.pg_dsn)
         logger.info("postgres checkpointer enabled")
 
+    # 会话短期记忆：think 入模型前做「token 预算·近期优先」投影（超阈值折叠旧轮为摘要）。
+    history_policy = HistoryPolicy(
+        max_messages=settings.history_max_messages, max_chars=settings.history_max_chars
+    )
+
     react_graph = build_react_graph(
-        react_model, tools, checkpointer=checkpointer, max_steps=settings.max_steps
+        react_model, tools, checkpointer=checkpointer,
+        max_steps=settings.max_steps, history_policy=history_policy,
     )
 
     # Plan-Execute：executor 复用一套 ReAct 子图（无 checkpointer，分支级 thread 隔离）。
-    executor_subgraph = build_react_graph(executor_model, tools, max_steps=settings.max_steps)
+    executor_subgraph = build_react_graph(
+        executor_model, tools, max_steps=settings.max_steps, history_policy=history_policy
+    )
     plan_graph = build_plan_execute_graph(
         planner_model,
         executor_subgraph,
@@ -79,10 +89,15 @@ async def serve(settings: Settings | None = None) -> None:
         CognitionServicer(react_graph, settings, plan_graph=plan_graph, tool_providers=provider_map),
         server,
     )
+    # 标准 gRPC 健康检查：图装配完成后翻 SERVING，供 Go /healthz 探"业务就绪"。
+    health_servicer = health.aio.HealthServicer()
+    health_pb2_grpc.add_HealthServicer_to_server(health_servicer, server)
+
     listen = f"{settings.grpc_host}:{settings.grpc_port}"
     server.add_insecure_port(listen)
 
     await server.start()
+    await health_servicer.set("", health_pb2.HealthCheckResponse.SERVING)
     logger.info("cognition gRPC server listening on %s", listen)
 
     # 优雅停机
@@ -98,6 +113,7 @@ async def serve(settings: Settings | None = None) -> None:
     try:
         await stop.wait()
     finally:
+        await health_servicer.set("", health_pb2.HealthCheckResponse.NOT_SERVING)
         await server.stop(grace=5.0)
         for close in tool_closers:  # 关闭 MCP worker task / 子进程
             try:

@@ -22,6 +22,7 @@ import (
 	"my-agent/control-plane/internal/api"
 	"my-agent/control-plane/internal/cognition"
 	"my-agent/control-plane/internal/dispatch"
+	"my-agent/control-plane/internal/event"
 	agentv1 "my-agent/control-plane/internal/genproto/agent/v1"
 	"my-agent/control-plane/internal/store"
 	"my-agent/control-plane/internal/stream"
@@ -35,9 +36,24 @@ type fakeCog struct {
 }
 
 func (f *fakeCog) Run(req *agentv1.RunRequest, srv grpc.ServerStreamingServer[agentv1.Event]) error {
-	in, _ := structpb.NewStruct(map[string]any{"expression": "2*(3+4)"})
 	runID := req.GetRunId()
-	events := []*agentv1.Event{
+	var events []*agentv1.Event
+	if req.GetAgentType() == "plan_solve" {
+		events = planEvents(runID)
+	} else {
+		events = reactEvents(runID)
+	}
+	for _, e := range events {
+		if err := srv.Send(e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func reactEvents(runID string) []*agentv1.Event {
+	in, _ := structpb.NewStruct(map[string]any{"expression": "2*(3+4)"})
+	return []*agentv1.Event{
 		{Seq: 1, RunId: runID, MessageId: runID + ":think:1", Type: agentv1.EventType_EVENT_TYPE_TOOL_THOUGHT, TsUnixMs: ts, IsFinal: true,
 			Payload: &agentv1.Event_ToolThought{ToolThought: &agentv1.ThoughtPayload{Text: "先算一下"}}},
 		{Seq: 2, RunId: runID, MessageId: "tc1", Type: agentv1.EventType_EVENT_TYPE_TOOL_CALL, TsUnixMs: ts, IsFinal: false,
@@ -49,12 +65,27 @@ func (f *fakeCog) Run(req *agentv1.RunRequest, srv grpc.ServerStreamingServer[ag
 		{Seq: 5, RunId: runID, MessageId: "res1", Type: agentv1.EventType_EVENT_TYPE_RESULT, TsUnixMs: ts, IsFinal: true, Finish: true,
 			Payload: &agentv1.Event_Result{Result: &agentv1.ResultPayload{Text: "答案是 14"}}},
 	}
-	for _, e := range events {
-		if err := srv.Send(e); err != nil {
-			return err
-		}
+}
+
+// planEvents 流出一次 Plan-Execute run 的代表性事件（plan_thought/plan/task/tool_*/result）。
+func planEvents(runID string) []*agentv1.Event {
+	in, _ := structpb.NewStruct(map[string]any{"expression": "2+3"})
+	return []*agentv1.Event{
+		{Seq: 1, RunId: runID, MessageId: runID + ":plan_thought:1", Type: agentv1.EventType_EVENT_TYPE_PLAN_THOUGHT, TsUnixMs: ts, IsFinal: true,
+			Payload: &agentv1.Event_ToolThought{ToolThought: &agentv1.ThoughtPayload{Text: "我来拆解任务", PlannerRoundId: runID + ":planner:1"}}},
+		{Seq: 2, RunId: runID, MessageId: runID + ":plan:1", Type: agentv1.EventType_EVENT_TYPE_PLAN, TsUnixMs: ts, IsFinal: true,
+			Payload: &agentv1.Event_Plan{Plan: &agentv1.PlanPayload{Title: "计算并汇总", Steps: []string{"计算 2+3"}, StepStatus: []string{"in_progress"}, PlannerRoundId: runID + ":planner:1"}}},
+		{Seq: 3, RunId: runID, MessageId: runID + ":task:1", Type: agentv1.EventType_EVENT_TYPE_TASK, TsUnixMs: ts, IsFinal: true,
+			Payload: &agentv1.Event_Task{Task: &agentv1.TaskPayload{Text: "计算 2+3"}}},
+		{Seq: 4, RunId: runID, MessageId: "b1:tc1", Type: agentv1.EventType_EVENT_TYPE_TOOL_CALL, TsUnixMs: ts, IsFinal: false,
+			Payload: &agentv1.Event_ToolCall{ToolCall: &agentv1.ToolPayload{ToolCallId: "b1:tc1", ToolName: "calculator", ToolProvider: "local", Status: agentv1.ToolCallStatus_TOOL_CALL_STATUS_RUNNING, DispatchIndex: 1, Input: in, Summary: "正在调用 calculator"}}},
+		{Seq: 5, RunId: runID, MessageId: "b1:tc1", Type: agentv1.EventType_EVENT_TYPE_TOOL_CALL, TsUnixMs: ts, IsFinal: true,
+			Payload: &agentv1.Event_ToolCall{ToolCall: &agentv1.ToolPayload{ToolCallId: "b1:tc1", ToolName: "calculator", ToolProvider: "local", Status: agentv1.ToolCallStatus_TOOL_CALL_STATUS_SUCCESS, DispatchIndex: 1, Input: in, Summary: "calculator 调用完成"}}},
+		{Seq: 6, RunId: runID, MessageId: "b1:tc1:result", Type: agentv1.EventType_EVENT_TYPE_TOOL_RESULT, TsUnixMs: ts, IsFinal: true,
+			Payload: &agentv1.Event_ToolResult{ToolResult: &agentv1.ToolPayload{ToolCallId: "b1:tc1", ToolName: "calculator", Input: in, ToolResult: "5"}}},
+		{Seq: 7, RunId: runID, MessageId: runID + ":result", Type: agentv1.EventType_EVENT_TYPE_RESULT, TsUnixMs: ts, IsFinal: true, Finish: true,
+			Payload: &agentv1.Event_Result{Result: &agentv1.ResultPayload{Text: "计算完成：2+3=5"}}},
 	}
-	return nil
 }
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -115,7 +146,7 @@ func TestEndToEnd_RunAndReplay(t *testing.T) {
 	events := store.NewEventRepository(pool)
 	hub := stream.NewHub(events, time.Hour, discardLogger())
 	d := dispatch.New(4, runs, client, hub, 40, discardLogger())
-	router := api.NewRouter(d, runs, events, nil, time.Minute, discardLogger())
+	router := api.NewRouter(d, runs, events, nil, nil, time.Minute, discardLogger())
 
 	// 1) 发起 run，捕获 SSE。
 	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(`{"query":"算 2*(3+4)","sessionId":"s1"}`))
@@ -150,10 +181,17 @@ func TestEndToEnd_RunAndReplay(t *testing.T) {
 		t.Fatalf("non-result frame finish should be false")
 	}
 
-	// 2) run 终态应为 SUCCESS。
+	// 2) run 终态应为 SUCCESS，且落库事件满足序列不变量（seq 无空洞、finish 仅 result 且恰一条）。
 	run, err := runs.GetRun(ctx, runID)
 	if err != nil || run.Status != store.StatusSuccess {
 		t.Fatalf("expected SUCCESS run, got %+v err=%v", run, err)
+	}
+	persisted, err := events.ListByRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("ListByRun: %v", err)
+	}
+	if err := event.ValidateSequence(persisted); err != nil {
+		t.Fatalf("ValidateSequence: %v", err)
 	}
 
 	// 3) 回放，断言与实时逐帧一致（重放==实时）。
@@ -173,5 +211,86 @@ func TestEndToEnd_RunAndReplay(t *testing.T) {
 	router.ServeHTTP(frec, freq)
 	if frec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 for other owner, got %d", frec.Code)
+	}
+}
+
+// 跨 agent_type 回放同构：plan_solve（plan_thought/plan/task/tool_*/result）重放==实时 + 序列不变量。
+func TestEndToEnd_PlanSolveReplay(t *testing.T) {
+	dsn := os.Getenv("TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("TEST_PG_DSN 未设置，跳过端到端集成测试")
+	}
+	ctx := context.Background()
+	pool, err := store.NewPool(ctx, dsn)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if err := store.Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `TRUNCATE events, runs CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+
+	lis := bufconn.Listen(1 << 20)
+	gsrv := grpc.NewServer()
+	agentv1.RegisterCognitionServiceServer(gsrv, &fakeCog{})
+	go func() { _ = gsrv.Serve(lis) }()
+	t.Cleanup(gsrv.Stop)
+	conn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc client: %v", err)
+	}
+	client := cognition.NewClient(conn)
+
+	runs := store.NewRunRepository(pool)
+	events := store.NewEventRepository(pool)
+	hub := stream.NewHub(events, time.Hour, discardLogger())
+	d := dispatch.New(4, runs, client, hub, 40, discardLogger())
+	router := api.NewRouter(d, runs, events, nil, nil, time.Minute, discardLogger())
+
+	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(`{"query":"算 2+3 并汇总","sessionId":"s2","agentType":"plan_solve"}`))
+	req.Header.Set("X-User-Id", "u1")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	runID := rec.Header().Get("X-Run-Id")
+	live := parseSSE(rec.Body.String())
+	wantTypes := []string{"plan_thought", "plan", "task", "tool_call", "tool_call", "tool_result", "result"}
+	if len(live) != len(wantTypes) {
+		t.Fatalf("expected %d frames, got %d: %s", len(wantTypes), len(live), rec.Body.String())
+	}
+	for i, f := range live {
+		if f["messageType"] != wantTypes[i] {
+			t.Fatalf("frame %d type=%v want %s", i, f["messageType"], wantTypes[i])
+		}
+	}
+	if live[len(live)-1]["finish"] != true {
+		t.Fatalf("last frame finish should be true")
+	}
+
+	run, err := runs.GetRun(ctx, runID)
+	if err != nil || run.Status != store.StatusSuccess || run.EntryAgent != "plan_solve" {
+		t.Fatalf("expected SUCCESS plan_solve run, got %+v err=%v", run, err)
+	}
+
+	persisted, err := events.ListByRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("ListByRun: %v", err)
+	}
+	if err := event.ValidateSequence(persisted); err != nil {
+		t.Fatalf("ValidateSequence: %v", err)
+	}
+
+	rreq := httptest.NewRequest(http.MethodGet, "/runs/"+runID+"/events", nil)
+	rreq.Header.Set("X-User-Id", "u1")
+	rrec := httptest.NewRecorder()
+	router.ServeHTTP(rrec, rreq)
+	replay := parseSSE(rrec.Body.String())
+	if !reflect.DeepEqual(replay, live) {
+		t.Fatalf("plan_solve replay != live\nlive:   %v\nreplay: %v", live, replay)
 	}
 }

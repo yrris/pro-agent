@@ -1,0 +1,144 @@
+"""会话历史的「token 预算·近期优先」只读投影（纯逻辑，无 I/O、无 LLM）。
+
+把 checkpoint 里累积的 messages 裁剪成有界视图再喂模型（不改已落库事实、不写 events）：
+- 恒保留 system 锚点 + 首条 Human（会话意图）；
+- 从最新往旧保留最近窗口，直至 max_messages / max_chars 预算用尽；
+- 被挤出的较旧轮次折叠成 1 条确定性摘要 SystemMessage（默认拼接，LLM 压缩走 summarize_fn seam）；
+- **绝不拆散 tool_use↔tool_result 配对**（AIMessage(tool_calls) 与其 ToolMessage 作为原子组同去同留），
+  否则 Anthropic 会因 orphan tool_use/tool_result 报 400——这是本模块最需被测试钉死的不变量。
+
+「源无关」：本函数只认 messages 序列，不关心来自 checkpoint 还是（未来）events 账本重建，故两种记忆
+方案都能原样复用（见 docs/06 §3）。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Callable, Optional
+
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+
+SUMMARY_PREFIX = "〔前情摘要〕"
+
+
+@dataclass(frozen=True)
+class HistoryPolicy:
+    """记忆投影预算。max_chars 用字符近似 token（对齐原项目 TokenCounter 的字符估算）。"""
+
+    max_messages: int = 40
+    max_chars: int = 24000
+
+
+@dataclass
+class HistoryReduction:
+    messages: list[AnyMessage]
+    summarized: bool = False
+    dropped_count: int = 0
+    dropped_groups: int = field(default=0)
+
+
+def _text(msg: AnyMessage) -> str:
+    c = getattr(msg, "content", "")
+    return c if isinstance(c, str) else str(c)
+
+
+def _total_chars(messages: list[AnyMessage]) -> int:
+    return sum(len(_text(m)) for m in messages)
+
+
+def _group_body(body: list[AnyMessage]) -> list[list[AnyMessage]]:
+    """把 body 分成原子组：AIMessage(tool_calls) + 其后紧邻的 ToolMessage 归为一组。"""
+    groups: list[list[AnyMessage]] = []
+    i = 0
+    n = len(body)
+    while i < n:
+        m = body[i]
+        if isinstance(m, AIMessage) and getattr(m, "tool_calls", None):
+            grp = [m]
+            j = i + 1
+            while j < n and isinstance(body[j], ToolMessage):
+                grp.append(body[j])
+                j += 1
+            groups.append(grp)
+            i = j
+        else:
+            groups.append([m])
+            i += 1
+    return groups
+
+
+def _summarize_default(dropped: list[list[AnyMessage]]) -> str:
+    """确定性折叠：每个被挤出的组取一行要点。"""
+    lines = [SUMMARY_PREFIX + "（较早对话已折叠，仅保留要点）"]
+    for grp in dropped:
+        head = grp[0]
+        role = type(head).__name__.replace("Message", "").lower() or "msg"
+        gist = _text(head).strip().replace("\n", " ")
+        if not gist and isinstance(head, AIMessage) and head.tool_calls:
+            gist = "调用工具 " + ", ".join(str(tc.get("name", "")) for tc in head.tool_calls)
+        if len(gist) > 120:
+            gist = gist[:120] + "…"
+        lines.append(f"- [{role}] {gist}")
+    return "\n".join(lines)
+
+
+def plan_history_reduction(
+    messages: list[AnyMessage],
+    policy: HistoryPolicy,
+    *,
+    summarize_fn: Optional[Callable[[list[list[AnyMessage]]], str]] = None,
+) -> HistoryReduction:
+    """把 messages 投影成不超预算的有界视图。未超预算则原样返回。"""
+    messages = list(messages)
+    if len(messages) <= policy.max_messages and _total_chars(messages) <= policy.max_chars:
+        return HistoryReduction(messages=messages, summarized=False)
+
+    # 1) 锚点：连续前导 system + 首条 Human。
+    anchor_end = 0
+    while anchor_end < len(messages) and isinstance(messages[anchor_end], SystemMessage):
+        anchor_end += 1
+    if anchor_end < len(messages) and isinstance(messages[anchor_end], HumanMessage):
+        anchor_end += 1
+    anchors = messages[:anchor_end]
+    body = messages[anchor_end:]
+
+    # 2) body 分原子组（保护 tool 配对）。
+    groups = _group_body(body)
+
+    # 3) 从尾部保留最近组，预算 = 总预算扣除锚点与 1 条摘要占位。
+    budget_msgs = max(policy.max_messages - len(anchors) - 1, 1)
+    budget_chars = max(policy.max_chars - _total_chars(anchors), 1)
+    kept: list[list[AnyMessage]] = []
+    used_msgs = 0
+    used_chars = 0
+    for grp in reversed(groups):
+        g_msgs = len(grp)
+        g_chars = _total_chars(grp)
+        if kept and (used_msgs + g_msgs > budget_msgs or used_chars + g_chars > budget_chars):
+            break
+        kept.insert(0, grp)  # 维持原序
+        used_msgs += g_msgs
+        used_chars += g_chars
+    kept_count = len(kept)
+    dropped_groups = groups[: len(groups) - kept_count]
+
+    recent = [m for grp in kept for m in grp]
+    if not dropped_groups:
+        # 全部近期组都在预算内（说明是锚点/单组过大），无可折叠，原样返回。
+        return HistoryReduction(messages=anchors + recent, summarized=False)
+
+    summary_text = (summarize_fn or _summarize_default)(dropped_groups)
+    summary_msg = SystemMessage(content=summary_text)
+    dropped_msg_count = sum(len(g) for g in dropped_groups)
+    return HistoryReduction(
+        messages=anchors + [summary_msg] + recent,
+        summarized=True,
+        dropped_count=dropped_msg_count,
+        dropped_groups=len(dropped_groups),
+    )

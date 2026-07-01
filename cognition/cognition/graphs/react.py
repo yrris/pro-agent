@@ -17,6 +17,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 
+from cognition.graphs.history import HistoryPolicy
 from cognition.graphs.nodes import make_think_node
 from cognition.graphs.state import AgentState, route_after_agent
 
@@ -27,6 +28,7 @@ def build_react_graph(
     checkpointer: Optional[BaseCheckpointSaver] = None,
     *,
     max_steps: int = 40,
+    history_policy: Optional["HistoryPolicy"] = None,
 ) -> CompiledStateGraph:
     """装配并编译 ReAct 图。
 
@@ -35,9 +37,10 @@ def build_react_graph(
         tools: 本地工具列表（用于 ToolNode）。
         checkpointer: 可选 Postgres checkpointer（None 则不持久化，便于测试）。
         max_steps: ReAct 循环上限（注入路由纯函数）。
+        history_policy: 可选记忆投影预算（None 则不裁剪，行为同 M1）。
     """
     graph = StateGraph(AgentState)
-    graph.add_node("agent", make_think_node(model))
+    graph.add_node("agent", make_think_node(model, history_policy=history_policy))
     graph.add_node("tools", ToolNode(list(tools)))
 
     graph.add_edge(START, "agent")

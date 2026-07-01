@@ -144,6 +144,24 @@ class Settings(BaseSettings):
     rag_subquery_max: int = Field(default=3, ge=1)
     rag_prefetch_limit: int = Field(default=20, ge=1)
 
+    # —— 会话短期记忆：历史投影预算（token 用字符近似）——
+    # think 节点入模型前对累积 messages 做"近期优先"投影，超阈值折叠旧轮为摘要。
+    history_max_messages: int = Field(default=40, ge=2)
+    history_max_chars: int = Field(default=24000, ge=256)
+
+    # —— 可选 Langfuse trace（seam，默认关，未装也能跑）——
+    langfuse_enabled: bool = Field(default=False)
+    langfuse_public_key: str | None = Field(
+        default=None, validation_alias=AliasChoices("COGNITION_LANGFUSE_PUBLIC_KEY", "LANGFUSE_PUBLIC_KEY")
+    )
+    langfuse_secret_key: str | None = Field(
+        default=None, validation_alias=AliasChoices("COGNITION_LANGFUSE_SECRET_KEY", "LANGFUSE_SECRET_KEY")
+    )
+    langfuse_host: str = Field(
+        default="https://cloud.langfuse.com",
+        validation_alias=AliasChoices("COGNITION_LANGFUSE_HOST", "LANGFUSE_HOST"),
+    )
+
     # 确定性脚本化模型开关：无需真实 LLM key 即可端到端验证（见 providers/fake.py）。
     fake_model: bool = Field(default=False)
 

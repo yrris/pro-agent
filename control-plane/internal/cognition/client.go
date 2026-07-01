@@ -9,6 +9,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health/grpc_health_v1"
 
 	"my-agent/control-plane/internal/event"
 	agentv1 "my-agent/control-plane/internal/genproto/agent/v1"
@@ -31,11 +32,14 @@ type Stream interface {
 // Client 是认知面客户端。
 type Client interface {
 	RunAgent(ctx context.Context, req RunRequest) (Stream, error)
+	// HealthCheck 探认知面「业务就绪」（标准 grpc.health.v1，非仅通道连通）。
+	HealthCheck(ctx context.Context) error
 	Close() error
 }
 
 type grpcClient struct {
 	conn *grpc.ClientConn
+	cc   grpc.ClientConnInterface // 供 health client 复用（Dial 与 NewClient 两条路径都填）
 	svc  agentv1.CognitionServiceClient
 }
 
@@ -45,12 +49,23 @@ func Dial(addr string) (Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cognition: dial %s: %w", addr, err)
 	}
-	return &grpcClient{conn: conn, svc: agentv1.NewCognitionServiceClient(conn)}, nil
+	return &grpcClient{conn: conn, cc: conn, svc: agentv1.NewCognitionServiceClient(conn)}, nil
 }
 
 // NewClient 基于已有连接构造客户端（用于依赖注入/测试，如 bufconn）。
 func NewClient(cc grpc.ClientConnInterface) Client {
-	return &grpcClient{svc: agentv1.NewCognitionServiceClient(cc)}
+	return &grpcClient{cc: cc, svc: agentv1.NewCognitionServiceClient(cc)}
+}
+
+func (c *grpcClient) HealthCheck(ctx context.Context) error {
+	resp, err := grpc_health_v1.NewHealthClient(c.cc).Check(ctx, &grpc_health_v1.HealthCheckRequest{Service: ""})
+	if err != nil {
+		return fmt.Errorf("cognition: health check: %w", err)
+	}
+	if resp.GetStatus() != grpc_health_v1.HealthCheckResponse_SERVING {
+		return fmt.Errorf("cognition: not serving (status=%s)", resp.GetStatus())
+	}
+	return nil
 }
 
 func (c *grpcClient) RunAgent(ctx context.Context, req RunRequest) (Stream, error) {

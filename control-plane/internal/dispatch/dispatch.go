@@ -67,10 +67,19 @@ func (d *Dispatcher) Run(ctx context.Context, cmd StartCommand, sink stream.Sink
 	if agentType == "" {
 		agentType = "react"
 	}
+	// run-scoped 结构化日志：关联键与 Python 认知面一致（run_id/session_id/agent_type），
+	// 便于用同一 run_id 跨进程串起 Go↔Python 全链路。
+	var log *slog.Logger
+	if d.log != nil {
+		log = d.log.With("run_id", cmd.RunID, "session_id", cmd.SessionID, "agent_type", agentType)
+	}
 	if err := d.runs.CreateRun(ctx, store.CreateRunParams{
 		RunID: cmd.RunID, SessionID: cmd.SessionID, OwnerID: cmd.OwnerID, EntryAgent: agentType, QueryText: cmd.Query,
 	}); err != nil {
 		return err
+	}
+	if log != nil {
+		log.Info("run start")
 	}
 
 	finCtx := context.WithoutCancel(ctx)
@@ -80,14 +89,20 @@ func (d *Dispatcher) Run(ctx context.Context, cmd StartCommand, sink stream.Sink
 	})
 	if err != nil {
 		_ = d.runs.FinishRun(finCtx, store.FinishRunParams{RunID: cmd.RunID, Status: store.StatusFailed, ErrorMsg: err.Error()})
+		if log != nil {
+			log.Error("open run stream failed", "err", err)
+		}
 		return err
 	}
 
 	res := d.hub.Pump(ctx, cmd.RunID, st, sink)
 	if ferr := d.runs.FinishRun(finCtx, store.FinishRunParams{
 		RunID: cmd.RunID, Status: res.Status, FinalSummaryText: res.Summary, ErrorMsg: res.ErrorMsg,
-	}); ferr != nil && d.log != nil {
-		d.log.Error("finish run failed", "runID", cmd.RunID, "err", ferr)
+	}); ferr != nil && log != nil {
+		log.Error("finish run failed", "err", ferr)
+	}
+	if log != nil {
+		log.Info("run finished", "status", res.Status)
 	}
 	return nil
 }

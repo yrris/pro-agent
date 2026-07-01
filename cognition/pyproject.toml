@@ -23,6 +23,7 @@ dependencies = [
     "openai>=1.50",                # DeepSeek（OpenAI 兼容）/ 可选生图
     "langchain-anthropic>=0.3",    # Claude 的 LangChain 封装：bind_tools + 规范 on_chat_model_* 事件
     "langchain-openai>=0.3",       # DeepSeek(OpenAI 兼容) 的 LangChain 封装
+    "grpcio-health-checking>=1.81.1",
 ]
 
 [project.optional-dependencies]
