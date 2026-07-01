@@ -46,10 +46,12 @@ _PLANNER_NODE = "planner"
 class EventMapper:
     """单个 run 的有状态映射器（非线程安全，按 run 实例化）。"""
 
-    def __init__(self, run_id: str) -> None:
+    def __init__(self, run_id: str, tool_providers: Optional[dict[str, str]] = None) -> None:
         self.run_id = run_id
         self._seq = 0
         self._finished = False
+        # 工具名 → provider（local/mcp/skill）。装配期从工具集构建后注入；缺省即 "local"（向后兼容）。
+        self._tool_providers: dict[str, str] = dict(tool_providers or {})
 
         # planner round 追踪（planner 非并行，单槽即可）。
         self._planner_round = 0
@@ -78,6 +80,10 @@ class EventMapper:
 
     def _ns_tcid(self, branch: str, tcid: str) -> str:
         return f"{branch}:{tcid}" if branch else tcid
+
+    def _provider_for(self, tool_name: str) -> str:
+        """按工具名解析 provider；未登记默认 "local"（MCP 工具名已 namespaced）。"""
+        return self._tool_providers.get(tool_name, "local")
 
     def _exec_think_mid(self, branch: str, step: int) -> str:
         return f"{self.run_id}:{branch}:think:{step}" if branch else f"{self.run_id}:think:{step}"
@@ -304,7 +310,7 @@ class EventMapper:
                         tool_call=ToolPayload(
                             tool_call_id=tcid,
                             tool_name=name,
-                            tool_provider="local",
+                            tool_provider=self._provider_for(name),
                             status=ToolCallStatus.RUNNING,
                             dispatch_index=di,
                             input=args,
@@ -360,7 +366,7 @@ class EventMapper:
                     tool_call=ToolPayload(
                         tool_call_id=tcid,
                         tool_name=name,
-                        tool_provider="local",
+                        tool_provider=self._provider_for(name),
                         status=ToolCallStatus.FAILED,
                         dispatch_index=dispatch_index,
                         summary=f"{name} 调用失败",
@@ -380,7 +386,7 @@ class EventMapper:
                     tool_result=ToolPayload(
                         tool_call_id=tcid,
                         tool_name=name,
-                        tool_provider="local",
+                        tool_provider=self._provider_for(name),
                         dispatch_index=dispatch_index,
                         tool_result=observation,
                     ),
@@ -399,7 +405,7 @@ class EventMapper:
                     tool_call=ToolPayload(
                         tool_call_id=tcid,
                         tool_name=name,
-                        tool_provider="local",
+                        tool_provider=self._provider_for(name),
                         status=ToolCallStatus.SUCCESS,
                         dispatch_index=dispatch_index,
                         summary=f"{name} 调用完成",
@@ -418,7 +424,7 @@ class EventMapper:
                     tool_result=ToolPayload(
                         tool_call_id=tcid,
                         tool_name=name,
-                        tool_provider="local",
+                        tool_provider=self._provider_for(name),
                         dispatch_index=dispatch_index,
                         tool_result=observation,
                         artifact_refs=_coerce_artifacts(artifact),

@@ -96,6 +96,18 @@ class Settings(BaseSettings):
     # 是否真正上传到 MinIO；默认 False → 单测/无 MinIO 环境只构造 ArtifactRef，不触网。
     minio_upload_enabled: bool = Field(default=False)
 
+    # —— 工具生态：MCP / Skill ——
+    # 默认开关为真但无配置即为空操作（不接任何 MCP/Skill），故不改变既有行为。
+    # 环境变量传 JSON：COGNITION_MCP_SERVERS='{"fetch":{"transport":"stdio","command":"uvx",...}}'。
+    mcp_enabled: bool = Field(default=True)
+    mcp_servers: dict[str, dict] = Field(default_factory=dict)
+    skills_enabled: bool = Field(default=True)
+    skills_dirs: list[str] = Field(default_factory=list)  # COGNITION_SKILLS_DIRS='["./skills"]'
+    skill_runner: str = Field(default="local")  # "local"（dev/CI）| "docker"（生产隔离）
+    skill_runner_image: str = Field(default="my-agent/skill-executor:latest")
+    skill_disclosure_max_chars: int = Field(default=8000, ge=256)  # L2 正文预算
+    skill_default_timeout: float = Field(default=120.0, gt=0)
+
     # 确定性脚本化模型开关：无需真实 LLM key 即可端到端验证（见 providers/fake.py）。
     fake_model: bool = Field(default=False)
 

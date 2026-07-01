@@ -1,22 +1,88 @@
 """工具注册表。
 
-`get_local_tools()` 返回本阶段的本地工具集合。这里是 toolProvider="local" 概念上
-被打标的地方——后续接 MCP / Skill 工具时，在此聚合并标注各自的 provider。
+`get_local_tools()` 返回本地工具集合（provider="local"）。`build_tool_suite()` 在装配期把
+本地 + MCP + Skill 工具聚合成一份统一 `BaseTool` 列表，并给出：
+- `provider_map`：工具名 → provider（local/mcp/skill），注入 EventMapper 让事件带上 tool_provider；
+- `closers`：需在停机时优雅关闭的资源（如 MCP worker task / 子进程）。
 
-M2：calculator（无副作用计算）+ write_report（产物落 MinIO，登记 artifact）。
+所有工具都是 LangChain `StructuredTool`，因此经 `get_local_tools` seam 注入 `bind_tools`/`ToolNode`
+即可复用现有事件、产物、回放链路（proto/Go 零改）。
 """
 
 from __future__ import annotations
 
+import logging
+from typing import Awaitable, Callable
+
 from langchain_core.tools import BaseTool
 
+from cognition.config import Settings, get_settings
+from cognition.mcp.naming import dedup
 from cognition.tools.calculator import calculator
 from cognition.tools.report import write_report
 
-# 工具提供方标记（事件契约里 tool_provider 字段的来源）。本阶段恒为 "local"。
+logger = logging.getLogger(__name__)
+
+# 工具提供方标记（事件契约里 tool_provider 字段的来源）。
 LOCAL_PROVIDER = "local"
+
+Closer = Callable[[], Awaitable[None]]
 
 
 def get_local_tools() -> list[BaseTool]:
-    """返回本地工具列表（M2：calculator + write_report）。"""
+    """返回本地工具列表（calculator + write_report）。"""
     return [calculator, write_report]
+
+
+def _build_script_runner(settings: Settings):
+    if settings.skill_runner == "docker":
+        from cognition.skills.runner.docker import DockerScriptRunner
+
+        return DockerScriptRunner(settings.skill_runner_image, settings=settings)
+    from cognition.skills.runner.local import LocalSubprocessScriptRunner
+
+    return LocalSubprocessScriptRunner(settings)
+
+
+async def build_tool_suite(
+    settings: Settings | None = None,
+) -> tuple[list[BaseTool], dict[str, str], list[Closer]]:
+    """聚合 local + MCP + Skill 工具，返回 (tools, provider_map, closers)。"""
+    settings = settings or get_settings()
+    tools: list[BaseTool] = list(get_local_tools())
+    closers: list[Closer] = []
+
+    # —— MCP：装配期预热（fail-soft 在 registry 内） ——
+    if settings.mcp_enabled and settings.mcp_servers:
+        from cognition.mcp.config import parse_servers
+        from cognition.mcp.registry import McpRegistry
+
+        registry = McpRegistry()
+        cfgs = parse_servers(settings.mcp_servers)
+        mcp_tools = await registry.preload(cfgs)
+        tools.extend(mcp_tools)
+        closers.append(registry.aclose)
+        if registry.errors:
+            logger.warning("MCP 部分 server 预热失败: %s", registry.errors)
+
+    # —— Skill：扫描 SKILL.md + 构建工具 ——
+    if settings.skills_enabled and settings.skills_dirs:
+        from cognition.skills.registry import SkillRegistry
+        from cognition.skills.tools import build_skill_tools
+
+        skill_registry = SkillRegistry()
+        skill_registry.refresh(settings.skills_dirs)
+        runner = _build_script_runner(settings)
+        tools.extend(
+            build_skill_tools(
+                skill_registry,
+                runner,
+                settings=settings,
+                max_body_chars=settings.skill_disclosure_max_chars,
+                default_timeout=settings.skill_default_timeout,
+            )
+        )
+
+    tools = dedup(tools)
+    provider_map = {t.name: (t.metadata or {}).get("provider", LOCAL_PROVIDER) for t in tools}
+    return tools, provider_map, closers

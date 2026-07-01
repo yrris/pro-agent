@@ -22,7 +22,7 @@ from cognition.graphs.react import build_react_graph
 from cognition.providers.router import select_model
 from cognition.server.servicer import CognitionServicer
 from cognition.sop import default_sop_store
-from cognition.tools.registry import get_local_tools
+from cognition.tools.registry import build_tool_suite
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,8 @@ async def serve(settings: Settings | None = None) -> None:
     """启动 gRPC 服务并阻塞直至终止。"""
     settings = settings or get_settings()
 
-    tools = get_local_tools()
+    # 装配期聚合 local + MCP + Skill 工具；provider_map 注入事件映射，tool_closers 停机时关闭。
+    tools, provider_map, tool_closers = await build_tool_suite(settings)
 
     if settings.fake_model:
         from cognition.providers.fake import (
@@ -75,7 +76,8 @@ async def serve(settings: Settings | None = None) -> None:
 
     server = grpc.aio.server()
     agent_pb2_grpc.add_CognitionServiceServicer_to_server(
-        CognitionServicer(react_graph, settings, plan_graph=plan_graph), server
+        CognitionServicer(react_graph, settings, plan_graph=plan_graph, tool_providers=provider_map),
+        server,
     )
     listen = f"{settings.grpc_host}:{settings.grpc_port}"
     server.add_insecure_port(listen)
@@ -97,6 +99,11 @@ async def serve(settings: Settings | None = None) -> None:
         await stop.wait()
     finally:
         await server.stop(grace=5.0)
+        for close in tool_closers:  # 关闭 MCP worker task / 子进程
+            try:
+                await close()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("tool 资源关闭失败: %s", exc)
         if aclose is not None:
             await aclose()
         logger.info("cognition gRPC server stopped")

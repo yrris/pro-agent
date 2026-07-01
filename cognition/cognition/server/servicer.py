@@ -30,10 +30,12 @@ AGENT_TYPE_PLAN_SOLVE = "plan_solve"
 class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
     """一次 run = 一个 server-streaming RPC。按 agent_type 选图。"""
 
-    def __init__(self, react_graph, settings: Settings, plan_graph=None) -> None:
+    def __init__(self, react_graph, settings: Settings, plan_graph=None, tool_providers=None) -> None:
         self.react_graph = react_graph
         self.plan_graph = plan_graph
         self.settings = settings
+        # 工具名 → provider（local/mcp/skill），装配期从工具集构建后注入 EventMapper。
+        self.tool_providers = dict(tool_providers or {})
 
     def _build(self, request):
         """返回 (graph, initial_state, recursion_limit)。"""
@@ -73,7 +75,7 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
         run_id = request.run_id or "unknown"
         session_id = request.session_id or run_id
 
-        mapper = EventMapper(run_id)
+        mapper = EventMapper(run_id, self.tool_providers)
         graph, state, recursion = self._build(request)
         config = {
             "configurable": {"thread_id": session_id},
