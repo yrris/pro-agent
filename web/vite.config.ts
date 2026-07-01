@@ -1,0 +1,20 @@
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+
+// 控制面地址：默认 :8080，可用 VITE_BACKEND 覆盖。
+const backend = process.env.VITE_BACKEND || "http://localhost:8080";
+
+// 把面向后端的路径代理到控制面 → 前端全用相对路径，浏览器视角同源，零 CORS。
+// SSE 走流式透传（Vite 默认不缓冲）。
+const proxy = {
+  "/runs": { target: backend, changeOrigin: true },
+  "/artifacts": { target: backend, changeOrigin: true },
+  "/healthz": { target: backend, changeOrigin: true },
+};
+
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  server: { port: 5173, proxy },
+  test: { environment: "node", include: ["src/**/*.test.ts"] },
+});
