@@ -65,6 +65,14 @@ async def build_tool_suite(
         if registry.errors:
             logger.warning("MCP 部分 server 预热失败: %s", registry.errors)
 
+    # —— RAG：把 Agentic RAG 子图包成 knowledge_search 工具 ——
+    if getattr(settings, "rag_enabled", False):
+        from cognition.rag.graph import build_rag_subgraph
+        from cognition.tools.knowledge_search import build_knowledge_search_tool
+
+        subgraph = build_rag_subgraph(settings)  # 装配期编译一次（含 store/embedder/rerank 预热）
+        tools.append(build_knowledge_search_tool(subgraph, settings))
+
     # —— Skill：扫描 SKILL.md + 构建工具 ——
     if settings.skills_enabled and settings.skills_dirs:
         from cognition.skills.registry import SkillRegistry

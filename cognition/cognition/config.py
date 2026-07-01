@@ -108,6 +108,42 @@ class Settings(BaseSettings):
     skill_disclosure_max_chars: int = Field(default=8000, ge=256)  # L2 正文预算
     skill_default_timeout: float = Field(default=120.0, gt=0)
 
+    # —— Agentic RAG（Qdrant 混合检索）——
+    # 默认 rag_enabled=False → knowledge_search 不注入，既有行为/测试不变。
+    rag_enabled: bool = Field(default=False)
+    qdrant_url: str = Field(
+        default="http://localhost:6333",
+        validation_alias=AliasChoices("COGNITION_QDRANT_URL", "QDRANT_URL"),
+    )  # ":memory:" 或空 → 本地内存模式（离线/测试）
+    qdrant_collection: str = Field(default="cognition_docs")
+    # embedding：fake（测试确定性）| fastembed（本地 ONNX）| siliconflow（国产便宜 API）
+    embedding_provider: str = Field(default="fake")
+    embedding_model: str = Field(default="BAAI/bge-small-zh-v1.5")
+    embedding_dimension: int = Field(default=64, ge=1)  # fake=64；bge-small-zh=512
+    embedding_base_url: str = Field(default="https://api.siliconflow.cn/v1")
+    embedding_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("COGNITION_EMBEDDING_API_KEY", "SILICONFLOW_API_KEY"),
+    )
+    # sparse：fake（确定性 hashing）| fastembed（Qdrant/bm25）
+    sparse_provider: str = Field(default="fake")
+    # rerank
+    rerank_enabled: bool = Field(default=False)
+    rerank_provider: str = Field(default="fake")  # fake | siliconflow
+    rerank_model: str = Field(default="BAAI/bge-reranker-v2-m3")
+    rerank_base_url: str = Field(default="https://api.siliconflow.cn/v1")
+    rerank_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("COGNITION_RERANK_API_KEY", "SILICONFLOW_API_KEY"),
+    )
+    rerank_threshold: float = Field(default=0.0, ge=0.0)  # 真实 reranker 用 0.3；fake 用 0.0
+    # 检索/反思参数
+    rag_top_k: int = Field(default=10, ge=1)
+    rag_rerank_top_k: int = Field(default=5, ge=1)
+    rag_reflection_limit: int = Field(default=2, ge=0)
+    rag_subquery_max: int = Field(default=3, ge=1)
+    rag_prefetch_limit: int = Field(default=20, ge=1)
+
     # 确定性脚本化模型开关：无需真实 LLM key 即可端到端验证（见 providers/fake.py）。
     fake_model: bool = Field(default=False)
 

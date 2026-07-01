@@ -136,6 +136,26 @@ def _fake_executor_decide(messages: List[BaseMessage]) -> AIMessage:
     )
 
 
+def _fake_rag_decide(messages: List[BaseMessage]) -> AIMessage:
+    """fake RAG 模型：按提示词关键字分派 route/expand/reflect/generate 响应（无状态）。"""
+    text = "".join(str(getattr(m, "content", "")) for m in messages)
+    if "只回答 YES 或 NO" in text:  # route
+        simple = any(g in text for g in ("你好", "谢谢", "hello", "hi"))
+        return AIMessage(content="NO" if simple else "YES")
+    if "拆解成" in text:  # expand
+        return AIMessage(content="子问题一\n子问题二")
+    if "是否足够" in text:  # reflect：一轮即判足够
+        return AIMessage(content='{"is_answer": true, "rewrite_query": ""}')
+    if "直接" in text:  # direct（simple 路径）
+        return AIMessage(content="这是直接回答。")
+    return AIMessage(content="根据检索到的证据作答〔1〕。")  # generate
+
+
+def build_fake_rag_model() -> MessageDrivenChatModel:
+    """RAG 子图的 fake 模型（无状态、按提示词关键字分派）。"""
+    return MessageDrivenChatModel(decide=_fake_rag_decide)
+
+
 def build_fake_plan_model() -> MessageDrivenChatModel:
     """plan_solve 的 fake planner（无状态、可安全并行/跨 run 复用）。"""
     return MessageDrivenChatModel(decide=_fake_planner_decide)

@@ -43,3 +43,16 @@ async def test_suite_defaults_local_only():
     assert {t.name for t in tools} == {"calculator", "write_report"}
     assert set(provider_map.values()) == {"local"}
     assert closers == []
+
+
+async def test_suite_includes_knowledge_search_when_rag_enabled():
+    # 离线：fake 模型 + :memory: qdrant + fake embedding，构建不触网、不需 key
+    settings = Settings(
+        mcp_enabled=False, skills_dirs=[], rag_enabled=True, fake_model=True,
+        qdrant_url=":memory:", embedding_provider="fake", sparse_provider="fake",
+        embedding_dimension=64, minio_upload_enabled=False,
+    )
+    tools, provider_map, _ = await build_tool_suite(settings)
+    names = {t.name for t in tools}
+    assert "knowledge_search" in names
+    assert provider_map["knowledge_search"] == "local"
