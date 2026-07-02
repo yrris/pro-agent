@@ -29,6 +29,10 @@ function Composer({
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
+              // 输入法组合期间的 Enter 只用于选词上屏（中文打英文单词等），不发送。
+              // isComposing 为标准判定；keyCode 229 兜 Safari/旧 Chromium 在
+              // compositionend 前后派发 keydown 的时序差（对齐 ChatGPT/Claude 行为）。
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
               e.preventDefault();
               submit();
             }

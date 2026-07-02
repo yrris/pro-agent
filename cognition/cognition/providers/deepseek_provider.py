@@ -1,6 +1,10 @@
-"""DeepSeek provider 工厂（OpenAI 兼容）。
+"""DeepSeek provider 工厂。
 
-薄封装 langchain-openai 的 ChatOpenAI，指向 DeepSeek 的 OpenAI 兼容端点。延迟 import。
+用官方 langchain-deepseek 的 ChatDeepSeek（继承 ChatOpenAI）而非裸 ChatOpenAI：
+后者在流式时**丢弃 reasoning_content**（实测 0 个推理 chunk），导致思考模型
+（deepseek-reasoner / deepseek-v4-pro）的思考链到不了事件流；ChatDeepSeek 会把
+推理增量放进 additional_kwargs["reasoning_content"]，由 mapper 的 _thought_delta
+（extract_reasoning_delta seam）接入 thought 事件。延迟 import。
 """
 
 from __future__ import annotations
@@ -14,15 +18,15 @@ from cognition.config import Settings, get_settings
 
 
 def build_deepseek_chat(settings: Settings | None = None, **kwargs: Any) -> "BaseChatModel":
-    """构造指向 DeepSeek 的 ChatOpenAI。"""
-    from langchain_openai import ChatOpenAI
+    """构造指向 DeepSeek 的 ChatDeepSeek（透传思考链）。"""
+    from langchain_deepseek import ChatDeepSeek
 
     settings = settings or get_settings()
     params: dict[str, Any] = {
         "model": settings.deepseek_model,
-        "base_url": settings.deepseek_base_url,
+        "api_base": settings.deepseek_base_url,
     }
     if settings.deepseek_api_key:
         params["api_key"] = settings.deepseek_api_key
     params.update(kwargs)
-    return ChatOpenAI(**params)
+    return ChatDeepSeek(**params)

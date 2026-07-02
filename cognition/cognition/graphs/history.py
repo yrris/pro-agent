@@ -26,6 +26,51 @@ from langchain_core.messages import (
 
 SUMMARY_PREFIX = "〔前情摘要〕"
 
+# 合成应答文案：让模型明确知道该工具调用没有产生结果（而非凭空猜测）。
+DANGLING_TOOL_NOTE = "（该工具调用执行被中断，未产生结果）"
+
+
+def repair_dangling_tool_calls(messages: list[AnyMessage]) -> list[AnyMessage]:
+    """把消息序列修复成 provider 合法形态（只读投影，不回写 state/checkpoint）。
+
+    两类病态都会让 DeepSeek/OpenAI/Anthropic 直接 400，且一旦进入 checkpoint 线程，
+    该会话每一轮都失败（永久污染）：
+    - **悬空 tool_calls**：AIMessage.tool_calls 缺少紧随的 ToolMessage 应答——工具执行
+      崩溃当轮 think 已提交、tools 未提交时产生 → 紧随其组补一条合成 error ToolMessage；
+    - **孤儿 ToolMessage**：无前置 tool_call 应答对象 → 丢弃。
+
+    健康序列原样返回（不复制、不改动），因此可无条件挂在每次入模型前。
+    """
+    out: list[AnyMessage] = []
+    changed = False
+    i, n = 0, len(messages)
+    while i < n:
+        m = messages[i]
+        if isinstance(m, AIMessage) and getattr(m, "tool_calls", None):
+            group: list[AnyMessage] = [m]
+            answered: set[str] = set()
+            j = i + 1
+            while j < n and isinstance(messages[j], ToolMessage):
+                group.append(messages[j])
+                answered.add(str(getattr(messages[j], "tool_call_id", "") or ""))
+                j += 1
+            for tc in m.tool_calls:
+                tcid = str((tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", "")) or "")
+                if tcid and tcid not in answered:
+                    group.append(
+                        ToolMessage(content=DANGLING_TOOL_NOTE, tool_call_id=tcid, status="error")
+                    )
+                    changed = True
+            out.extend(group)
+            i = j
+        elif isinstance(m, ToolMessage):
+            changed = True  # 孤儿：丢弃
+            i += 1
+        else:
+            out.append(m)
+            i += 1
+    return out if changed else messages
+
 
 @dataclass(frozen=True)
 class HistoryPolicy:

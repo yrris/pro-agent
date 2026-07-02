@@ -35,6 +35,7 @@ from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Send
 
+from cognition.graphs.history import repair_dangling_tool_calls
 from cognition.graphs.plan_lifecycle import (
     Plan,
     all_completed,
@@ -247,7 +248,10 @@ def build_plan_execute_graph(
         sub_results = state.get("sub_results") or []
         sop = state.get("sop") or ""
         query = state.get("query", "")
-        history = list(state.get("planner_messages") or [])
+        # planner 只把 planning 当"结构化输出"解析、从不执行它 → 历史里的 planning
+        # tool_calls 永远没有 ToolMessage 应答，真实 provider（DeepSeek/OpenAI/Anthropic）
+        # 第二轮起会 400。入模型前做修复投影（补合成应答），state 原样累积不动。
+        history = repair_dangling_tool_calls(list(state.get("planner_messages") or []))
         system = SystemMessage(content=PLANNER_SYSTEM.replace("{{sop}}", sop))
 
         new_msgs: list = []

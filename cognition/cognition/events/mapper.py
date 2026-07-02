@@ -36,7 +36,16 @@ from cognition.events.schema import (
     ToolPayload,
     now_unix_ms,
 )
-from cognition.providers.reasoning import extract_text_delta
+from cognition.providers.reasoning import extract_reasoning_delta, extract_text_delta
+
+
+def _thought_delta(chunk: Any) -> str:
+    """thought 流增量 = 思考链（reasoning_content/thinking 块）+ 可见文本。
+
+    思考模型（DeepSeek reasoner/v4-pro、Claude thinking）推理增量先于作答增量到达，
+    因此拼接顺序天然是"先推理后作答"。非思考模型 reasoning 恒为空，行为不变。
+    """
+    return extract_reasoning_delta(chunk) + extract_text_delta(chunk)
 
 _AGENT_NODE = "agent"
 _TOOLS_NODE = "tools"
@@ -128,6 +137,10 @@ class EventMapper:
             branch = self._norm_branch(md.get("branch_id"))
             return self._on_tool_end(event, branch)
 
+        if node == _TOOLS_NODE and et == "on_tool_error":
+            branch = self._norm_branch(md.get("branch_id"))
+            return self._on_tool_error(event, branch)
+
         return []
 
     # ——————————————————————————————————————————————————————————
@@ -151,7 +164,7 @@ class EventMapper:
         ]
 
     def _on_planner_stream(self, event: dict) -> list[Event]:
-        text = extract_text_delta((event.get("data") or {}).get("chunk"))
+        text = _thought_delta((event.get("data") or {}).get("chunk"))
         if not text:
             return []
         return [
@@ -249,7 +262,7 @@ class EventMapper:
         ]
 
     def _on_exec_stream(self, event: dict, branch: str) -> list[Event]:
-        text = extract_text_delta((event.get("data") or {}).get("chunk"))
+        text = _thought_delta((event.get("data") or {}).get("chunk"))
         if not text:
             return []
         step = self._branch_think_step.get(branch, 0)
@@ -339,6 +352,74 @@ class EventMapper:
         events.append(self._make_result(extract_text_delta(out)))
         return events
 
+    def _failed_pair(
+        self, tcid: str, name: str, dispatch_index: int, step: str, error_text: str
+    ) -> list[Event]:
+        """失败收口事件对：tool_call(FAILED) + tool_result（on_tool_end 的 error 状态与
+        on_tool_error 两条路径共用，保证 running 卡片必被封口）。"""
+        return [
+            Event(
+                seq=self._next_seq(),
+                run_id=self.run_id,
+                message_id=tcid,
+                type=EventType.TOOL_CALL,
+                ts_unix_ms=now_unix_ms(),
+                is_final=True,
+                step=step,
+                tool_call=ToolPayload(
+                    tool_call_id=tcid,
+                    tool_name=name,
+                    tool_provider=self._provider_for(name),
+                    status=ToolCallStatus.FAILED,
+                    dispatch_index=dispatch_index,
+                    summary=f"{name} 调用失败",
+                    error_msg=error_text,
+                ),
+            ),
+            Event(
+                seq=self._next_seq(),
+                run_id=self.run_id,
+                message_id=f"{tcid}:result",
+                type=EventType.TOOL_RESULT,
+                ts_unix_ms=now_unix_ms(),
+                is_final=True,
+                step=step,
+                tool_result=ToolPayload(
+                    tool_call_id=tcid,
+                    tool_name=name,
+                    tool_provider=self._provider_for(name),
+                    dispatch_index=dispatch_index,
+                    tool_result=error_text,
+                ),
+            ),
+        ]
+
+    def _on_tool_error(self, event: dict, branch: str) -> list[Event]:
+        """工具运行期异常（ToolNode fail-soft 前已发出 on_tool_error）→ FAILED 收口。
+
+        此前 mapper 忽略 on_tool_error：异常路径下 tool_call 永远停在 running、无
+        tool_result。data.input 是 ToolNode 传入的完整 tool_call dict（含 id/name）；
+        取不到 id 时若恰有一个 running 项则兜底认领。
+        """
+        data = event.get("data") or {}
+        inp = data.get("input")
+        raw = ""
+        name = str(event.get("name") or "")
+        if isinstance(inp, dict):
+            raw = str(inp.get("id") or "")
+            name = str(inp.get("name") or name)
+        tcid = self._ns_tcid(branch, raw) if raw else ""
+        if not tcid or tcid not in self._running:
+            candidates = [k for k in self._running if self._running[k].get("name") == name]
+            if len(candidates) == 1:
+                tcid = candidates[0]
+            elif not tcid:
+                return []
+        info = self._running.pop(tcid, {})
+        step = str(info.get("step", self._branch_think_step.get(branch, 0)))
+        error_text = f"工具执行失败：{data.get('error')}"
+        return self._failed_pair(tcid, name, int(info.get("dispatch_index", 0)), step, error_text)
+
     def _on_tool_end(self, event: dict, branch: str) -> list[Event]:
         out = (event.get("data") or {}).get("output")
         raw = str(getattr(out, "tool_call_id", "") or "")
@@ -354,44 +435,7 @@ class EventMapper:
 
         events: list[Event] = []
         if status == "error":
-            events.append(
-                Event(
-                    seq=self._next_seq(),
-                    run_id=self.run_id,
-                    message_id=tcid,
-                    type=EventType.TOOL_CALL,
-                    ts_unix_ms=now_unix_ms(),
-                    is_final=True,
-                    step=step,
-                    tool_call=ToolPayload(
-                        tool_call_id=tcid,
-                        tool_name=name,
-                        tool_provider=self._provider_for(name),
-                        status=ToolCallStatus.FAILED,
-                        dispatch_index=dispatch_index,
-                        summary=f"{name} 调用失败",
-                        error_msg=observation,
-                    ),
-                )
-            )
-            events.append(
-                Event(
-                    seq=self._next_seq(),
-                    run_id=self.run_id,
-                    message_id=f"{tcid}:result",
-                    type=EventType.TOOL_RESULT,
-                    ts_unix_ms=now_unix_ms(),
-                    is_final=True,
-                    step=step,
-                    tool_result=ToolPayload(
-                        tool_call_id=tcid,
-                        tool_name=name,
-                        tool_provider=self._provider_for(name),
-                        dispatch_index=dispatch_index,
-                        tool_result=observation,
-                    ),
-                )
-            )
+            events.extend(self._failed_pair(tcid, name, dispatch_index, step, observation))
         else:
             events.append(
                 Event(

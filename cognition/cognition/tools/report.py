@@ -35,10 +35,17 @@ _MIME_MARKDOWN = "text/markdown; charset=utf-8"
 
 
 class ReportArgs(BaseModel):
-    """write_report 的入参 schema。"""
+    """write_report 的入参 schema。
+
+    注意：tool_call_id 必须以 InjectedToolCallId 注解**出现在本 schema 里**——ToolNode
+    按 args_schema（而非函数签名）判定可注入参数；只写在函数签名上不会被注入，会在
+    运行期炸 TypeError（线上踩坑：fake ReAct 只调 calculator，该路径直到真实模型调
+    write_report 才暴露）。LLM 可见 schema（tool_call_schema）会自动剔除注入字段。
+    """
 
     title: str = Field(description="报告标题。")
     content: str = Field(description="报告正文（纯文本/Markdown）。")
+    tool_call_id: Annotated[str, InjectedToolCallId]
 
 
 def _slugify(title: str) -> str:

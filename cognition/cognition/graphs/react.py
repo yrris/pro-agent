@@ -22,6 +22,16 @@ from cognition.graphs.nodes import make_think_node
 from cognition.graphs.state import AgentState, route_after_agent
 
 
+def _tool_error_message(exc: Exception) -> str:
+    """工具异常 → error ToolMessage 的文案（模型据此决定重试/绕过/收尾）。
+
+    ToolNode 默认只兜 ToolInvocationError（参数校验），运行期异常会 re-raise 炸穿整个
+    run，并在 checkpoint 留下悬空 tool_calls 污染会话线程（后续每轮 provider 400）。
+    这里显式兜住全部异常：配对保住、单工具失败不拖垮 run（与并行分支错误隔离同哲学）。
+    """
+    return f"工具执行失败：{type(exc).__name__}: {exc}"
+
+
 def build_react_graph(
     model: BaseChatModel,
     tools: Sequence[BaseTool],
@@ -41,7 +51,7 @@ def build_react_graph(
     """
     graph = StateGraph(AgentState)
     graph.add_node("agent", make_think_node(model, history_policy=history_policy))
-    graph.add_node("tools", ToolNode(list(tools)))
+    graph.add_node("tools", ToolNode(list(tools), handle_tool_errors=_tool_error_message))
 
     graph.add_edge(START, "agent")
 

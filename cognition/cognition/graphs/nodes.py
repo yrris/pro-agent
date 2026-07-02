@@ -12,7 +12,11 @@ from typing import Callable, Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from cognition.graphs.history import HistoryPolicy, plan_history_reduction
+from cognition.graphs.history import (
+    HistoryPolicy,
+    plan_history_reduction,
+    repair_dangling_tool_calls,
+)
 from cognition.graphs.state import AgentState
 
 
@@ -24,13 +28,16 @@ def make_think_node(
     注意：节点内用 `model.invoke`。在 `graph.astream_events(version="v2")` 上下文中，
     LangGraph 会请求流式，BaseChatModel 据此走 `_stream` 路径，从而产出 token 流。
 
-    若给定 history_policy，则在入模型前对累积 messages 做「token 预算·近期优先」只读投影
-    （不改 state、不写 events），把有界视图喂给模型。
+    入模型前两道只读投影（都不改 state、不写 events）：
+    1. `repair_dangling_tool_calls`：修复悬空 tool_calls/孤儿 ToolMessage——工具崩溃
+       当轮留下的病态 checkpoint 会让此后每轮 provider 400（线程永久污染），修复投影
+       让已污染的旧会话自动痊愈；
+    2. 若给定 history_policy，再做「token 预算·近期优先」裁剪。
     """
 
     def think(state: AgentState) -> dict:
         step = int(state.get("step", 0))
-        messages = state["messages"]
+        messages = repair_dangling_tool_calls(state["messages"])
         if history_policy is not None:
             messages = plan_history_reduction(messages, history_policy).messages
         ai_msg = model.invoke(messages)
