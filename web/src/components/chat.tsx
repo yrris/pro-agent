@@ -1,6 +1,9 @@
 import { memo } from "react";
 import type { PlanView as PlanViewT, RunState, ToolCallView } from "../lib/sse/frameTypes";
 import { Collapsible, Markdown, ProviderTag, ToolStatusBadge } from "./common";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 
 function UserBubble({ text }: { text: string }) {
   return (
@@ -26,38 +29,41 @@ function PlanCard({ plan }: { plan: PlanViewT }) {
   const done = plan.stepStatus.filter((s) => s === "completed").length;
   const pct = plan.steps.length ? Math.round((done / plan.steps.length) * 100) : 0;
   return (
-    <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/[0.06] p-3">
-      <div className="mb-2 flex items-center gap-2">
-        <span className="text-indigo-300">📋 {plan.title || "计划"}</span>
-        <span className="text-xs text-slate-400">
-          {done}/{plan.steps.length}
-        </span>
-        <div className="ml-auto h-1.5 w-24 overflow-hidden rounded-full bg-white/10">
-          <div className="h-full bg-indigo-400" style={{ width: `${pct}%` }} />
+    <Card className="gap-0 border-indigo-500/30 bg-indigo-500/[0.06] py-3">
+      <CardContent className="px-3">
+        <div className="mb-2 flex items-center gap-2">
+          <span className="text-indigo-300">📋 {plan.title || "计划"}</span>
+          <span className="text-xs text-slate-400">
+            {done}/{plan.steps.length}
+          </span>
+          <Progress value={pct} className="ml-auto h-1.5 w-24 bg-white/10 [&>[data-slot=progress-indicator]]:bg-indigo-400" />
         </div>
-      </div>
-      <ol className="space-y-1">
-        {plan.steps.map((step, i) => {
-          const st = plan.stepStatus[i] ?? "not_started";
-          const icon = st === "completed" ? "✅" : st === "in_progress" ? "⏳" : "⬜";
-          return (
-            <li key={i} className={`flex gap-2 text-sm ${st === "in_progress" ? "text-indigo-200" : "text-slate-300"}`}>
-              <span>{icon}</span>
-              <span className="min-w-0 flex-1">{step}</span>
-            </li>
-          );
-        })}
-      </ol>
-    </div>
+        <ol className="space-y-1">
+          {plan.steps.map((step, i) => {
+            const st = plan.stepStatus[i] ?? "not_started";
+            const icon = st === "completed" ? "✅" : st === "in_progress" ? "⏳" : "⬜";
+            return (
+              <li key={i} className={`flex gap-2 text-sm ${st === "in_progress" ? "text-indigo-200" : "text-slate-300"}`}>
+                <span>{icon}</span>
+                <span className="min-w-0 flex-1">{step}</span>
+              </li>
+            );
+          })}
+        </ol>
+      </CardContent>
+    </Card>
   );
 }
 
 function TaskChip({ text }: { text: string }) {
   return (
-    <div className="inline-flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-3 py-1.5 text-sm text-amber-100">
+    <Badge
+      variant="outline"
+      className="gap-2 rounded-lg border-amber-500/25 bg-amber-500/[0.06] px-3 py-1.5 text-sm font-normal text-amber-100"
+    >
       <span>🧩 子任务</span>
       <span className="text-slate-300">{text}</span>
-    </div>
+    </Badge>
   );
 }
 
@@ -94,10 +100,10 @@ function ToolCard({ call, resultText }: { call: ToolCallView; resultText?: strin
 
 function Conclusion({ text }: { text: string }) {
   return (
-    <div className="rounded-2xl rounded-bl-sm border border-emerald-500/25 bg-emerald-500/[0.05] px-4 py-3">
+    <Card className="gap-0 rounded-2xl rounded-bl-sm border-emerald-500/25 bg-emerald-500/[0.05] px-4 py-3">
       <div className="mb-1 text-xs text-emerald-300">结论</div>
       <Markdown>{text || "（空）"}</Markdown>
-    </div>
+    </Card>
   );
 }
 

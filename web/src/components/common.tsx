@@ -1,6 +1,12 @@
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Badge } from "@/components/ui/badge";
+import {
+  Collapsible as UICollapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 
 export function Markdown({ children }: { children: string }) {
   return (
@@ -10,6 +16,8 @@ export function Markdown({ children }: { children: string }) {
   );
 }
 
+// 换装说明：导出名与 props 签名保持 M6 原样（调用方 chat.tsx 零改动），
+// 内部改为 shadcn/Radix Collapsible；▶ caret 用 data-state 驱动旋转。
 export function Collapsible({
   title,
   defaultOpen = false,
@@ -21,19 +29,17 @@ export function Collapsible({
   children: ReactNode;
   right?: ReactNode;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03]">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-white/[0.04]"
-      >
-        <span className={`text-xs text-slate-400 transition-transform ${open ? "rotate-90" : ""}`}>▶</span>
-        <span className="flex-1 min-w-0 truncate">{title}</span>
+    <UICollapsible defaultOpen={defaultOpen} className="rounded-xl border bg-card">
+      <CollapsibleTrigger className="group flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-white/[0.04]">
+        <span className="text-xs text-slate-400 transition-transform group-data-[state=open]:rotate-90">
+          ▶
+        </span>
+        <span className="min-w-0 flex-1 truncate">{title}</span>
         {right}
-      </button>
-      {open && <div className="border-t border-white/10 px-3 py-2 text-sm">{children}</div>}
-    </div>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="border-t px-3 py-2 text-sm">{children}</CollapsibleContent>
+    </UICollapsible>
   );
 }
 
@@ -46,10 +52,10 @@ const STATUS_STYLE: Record<string, string> = {
 export function ToolStatusBadge({ status }: { status: string }) {
   const cls = STATUS_STYLE[status] ?? "bg-slate-500/15 text-slate-300 border-slate-500/30";
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs ${cls}`}>
+    <Badge className={`gap-1 rounded-full font-normal ${cls}`}>
       {status === "running" && <span className="pulse-dot">●</span>}
       {status}
-    </span>
+    </Badge>
   );
 }
 
@@ -60,5 +66,9 @@ export function ProviderTag({ provider }: { provider: string }) {
       : provider === "skill"
         ? "bg-amber-500/15 text-amber-300"
         : "bg-slate-500/15 text-slate-300";
-  return <span className={`rounded px-1.5 py-0.5 text-[10px] uppercase ${cls}`}>{provider}</span>;
+  return (
+    <Badge variant="secondary" className={`rounded px-1.5 py-0.5 text-[10px] uppercase ${cls}`}>
+      {provider}
+    </Badge>
+  );
 }

@@ -4,6 +4,9 @@ import { ArtifactWorkspace } from "../components/ArtifactWorkspace";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
 import type { RunStatus, RunTurn } from "../hooks/useRunStream";
 import { SAMPLE_QUESTIONS } from "../config";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 
 function Composer({
   disabled,
@@ -22,9 +25,10 @@ function Composer({
     setText("");
   };
   return (
-    <div className="border-t border-white/10 p-3">
+    <div className="border-t p-3">
       <div className="flex items-end gap-2">
-        <textarea
+        {/* M8 座位：附件按钮与文件 chips 加在 Textarea 左侧；M9 座位：输出格式选择器加在发送按钮左侧 */}
+        <Textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -40,15 +44,11 @@ function Composer({
           rows={2}
           placeholder={placeholder}
           disabled={disabled}
-          className="flex-1 resize-none rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-600 disabled:opacity-50"
+          className="min-h-0 flex-1 resize-none"
         />
-        <button
-          onClick={submit}
-          disabled={disabled}
-          className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-500 disabled:opacity-40"
-        >
+        <Button onClick={submit} disabled={disabled} className="rounded-xl px-4">
           发送
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -100,13 +100,14 @@ export function ChatView({
               <div className="mb-4 text-slate-400">向平台提问，试试：</div>
               <div className="space-y-2">
                 {SAMPLE_QUESTIONS.map((q) => (
-                  <button
+                  <Button
                     key={q}
+                    variant="outline"
                     onClick={() => onSubmit(q)}
-                    className="block w-full rounded-lg border border-white/10 px-3 py-2 text-left text-sm text-slate-300 hover:bg-white/5"
+                    className="block h-auto w-full px-3 py-2 text-left text-sm font-normal text-slate-300"
                   >
                     {q}
-                  </button>
+                  </Button>
                 ))}
               </div>
             </div>
@@ -124,7 +125,11 @@ export function ChatView({
               ))}
               {live && <MessageList state={live.state} query={live.query} />}
               {loadingHistory && (
-                <div className="mt-3 text-sm text-slate-500 pulse-dot">● 载入历史会话…</div>
+                <div className="mt-3 space-y-2">
+                  <div className="text-sm text-slate-500 pulse-dot">● 载入历史会话…</div>
+                  <Skeleton className="h-16 w-3/4" />
+                  <Skeleton className="h-10 w-1/2" />
+                </div>
               )}
               {status === "running" && <div className="mt-3 text-sm text-slate-500 pulse-dot">● 运行中…</div>}
               {status === "error" && (
@@ -135,7 +140,7 @@ export function ChatView({
         </div>
         <Composer disabled={composerDisabled} placeholder={placeholder} onSubmit={onSubmit} />
       </div>
-      <div className="hidden w-96 shrink-0 border-l border-white/10 lg:block">
+      <div className="hidden w-96 shrink-0 border-l lg:block">
         <ArtifactWorkspace artifacts={artifacts} />
       </div>
     </div>
