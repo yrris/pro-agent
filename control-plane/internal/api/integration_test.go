@@ -11,6 +11,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,11 +32,23 @@ import (
 const ts = int64(1700000000000)
 
 // fakeCog 是一个进程内的认知面假实现：把一次 ReAct(1 工具) run 的 5 个 golden 事件流出。
+// 记录最近一次收到的 RunRequest（供断言 attachments/metadata 贯通）。
 type fakeCog struct {
 	agentv1.UnimplementedCognitionServiceServer
+	mu   sync.Mutex
+	last *agentv1.RunRequest
+}
+
+func (f *fakeCog) lastReq() *agentv1.RunRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.last
 }
 
 func (f *fakeCog) Run(req *agentv1.RunRequest, srv grpc.ServerStreamingServer[agentv1.Event]) error {
+	f.mu.Lock()
+	f.last = req
+	f.mu.Unlock()
 	runID := req.GetRunId()
 	var events []*agentv1.Event
 	if req.GetAgentType() == "plan_solve" {
@@ -97,6 +110,7 @@ type e2eEnv struct {
 	runs   store.RunRepository
 	events store.EventRepository
 	router http.Handler
+	cog    *fakeCog
 }
 
 func newE2EEnv(t *testing.T) *e2eEnv {
@@ -121,7 +135,8 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	// 进程内 gRPC 假认知面（bufconn）。
 	lis := bufconn.Listen(1 << 20)
 	gsrv := grpc.NewServer()
-	agentv1.RegisterCognitionServiceServer(gsrv, &fakeCog{})
+	cog := &fakeCog{}
+	agentv1.RegisterCognitionServiceServer(gsrv, cog)
 	go func() { _ = gsrv.Serve(lis) }()
 	t.Cleanup(gsrv.Stop)
 	conn, err := grpc.NewClient("passthrough:///bufnet",
@@ -137,7 +152,54 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	hub := stream.NewHub(events, time.Hour, discardLogger())
 	d := dispatch.New(4, runs, client, hub, 40, discardLogger())
 	router := api.NewRouter(d, runs, store.NewSessionRepository(pool), events, nil, nil, time.Minute, "", discardLogger())
-	return &e2eEnv{ctx: ctx, runs: runs, events: events, router: router}
+	return &e2eEnv{ctx: ctx, runs: runs, events: events, router: router, cog: cog}
+}
+
+// M8：附件引用与 owner 元数据贯通 startRun→gRPC；伪造 key 在 SSE 开始前被 403。
+func TestEndToEnd_AttachmentsAndOwnerMetadata(t *testing.T) {
+	env := newE2EEnv(t)
+
+	// 1) 合法附件：透传至 proto RunRequest（attachments + metadata.owner_id）。
+	body := `{"query":"这份文档讲什么","sessionId":"sess-att",` +
+		`"attachments":[{"resourceKey":"uploads/u1/sess-att/ab12-doc.txt","fileName":"doc.txt","mimeType":"text/plain","size":6}]}`
+	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(body))
+	req.Header.Set("X-User-Id", "u1")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	if rec.Header().Get("X-Run-Id") == "" {
+		t.Fatalf("run did not start: %d %s", rec.Code, rec.Body.String())
+	}
+	got := env.cog.lastReq()
+	if got == nil {
+		t.Fatal("fakeCog 未收到请求")
+	}
+	atts := got.GetAttachments()
+	if len(atts) != 1 || atts[0].GetResourceKey() != "uploads/u1/sess-att/ab12-doc.txt" ||
+		atts[0].GetFileName() != "doc.txt" || atts[0].GetMimeType() != "text/plain" || atts[0].GetSize() != 6 {
+		t.Fatalf("attachments 未贯通: %+v", atts)
+	}
+	if got.GetMetadata()["owner_id"] != "u1" {
+		t.Fatalf("owner_id 未进 metadata: %v", got.GetMetadata())
+	}
+
+	// 2) 伪造他人 key → 403，且不落 run、不发 SSE。
+	forged := `{"query":"x","attachments":[{"resourceKey":"uploads/u2/s/zz-secret.txt"}]}`
+	req2 := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(forged))
+	req2.Header.Set("X-User-Id", "u1")
+	rec2 := httptest.NewRecorder()
+	env.router.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusForbidden || rec2.Header().Get("X-Run-Id") != "" {
+		t.Fatalf("forged attachment: expected 403 wo/ run, got %d %s", rec2.Code, rec2.Body.String())
+	}
+	// 运行产物 key 同样拒绝（只认自己的 uploads/）。
+	forged2 := `{"query":"x","attachments":[{"resourceKey":"someRunId/tc1/report.md"}]}`
+	req3 := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(forged2))
+	req3.Header.Set("X-User-Id", "u1")
+	rec3 := httptest.NewRecorder()
+	env.router.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusForbidden {
+		t.Fatalf("artifact-key attachment: expected 403, got %d", rec3.Code)
+	}
 }
 
 // parseSSE 提取所有 `event: message` 帧的 data JSON（跳过心跳）。
