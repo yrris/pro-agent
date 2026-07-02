@@ -32,6 +32,10 @@ def _dedup_key(text: str) -> str:
     return hashlib.md5(_norm(text).encode("utf-8")).hexdigest()
 
 
+# stable_ids 的 uuid5 命名空间（固定值，保证跨进程/跨次运行的确定性）。
+_STABLE_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+
+
 def ingest(
     docs: list[Doc],
     kb_id: str,
@@ -41,8 +45,16 @@ def ingest(
     sparse: SparseProvider,
     chunk_size: int = 500,
     overlap: int = 100,
+    stable_ids: bool = False,
 ) -> int:
-    """把 docs 切块+向量化+写入 Qdrant，返回写入的块数。"""
+    """把 docs 切块+向量化+写入 Qdrant，返回写入的块数。
+
+    stable_ids=True（M8 附件 run 前自动入库用）：point id = uuid5(NS, "{kb_id}|{dedup_key}")
+    ——**内容寻址幂等**：同附件重发/失败重试/续聊重跑变原地 upsert，不重复入库。
+    幂等键必须是内容哈希而非 source_id（上传 key 带随机前缀，同文件两次上传 source_id
+    不同）。代价：跨文件完全相同的 chunk 归并为一点（file_name last-write-wins），
+    可接受且顺带减少 top-k 重复。默认 False 保持既有随机 id 语义（脚本灌库/测试不变）。
+    """
     store.ensure_collection()
 
     chunks: list[str] = []
@@ -67,9 +79,11 @@ def ingest(
     now = int(time.time())
     points: list[models.PointStruct] = []
     for ch, meta, dv, (s_idx, s_val) in zip(chunks, metas, dense_vecs, sparse_vecs):
+        dk = _dedup_key(ch)
+        point_id = str(uuid.uuid5(_STABLE_NS, f"{kb_id}|{dk}")) if stable_ids else uuid.uuid4().hex
         points.append(
             models.PointStruct(
-                id=uuid.uuid4().hex,
+                id=point_id,
                 vector={
                     DENSE_VECTOR: dv,
                     SPARSE_VECTOR: models.SparseVector(indices=s_idx, values=s_val),
@@ -80,7 +94,7 @@ def ingest(
                     "source_id": meta["source_id"],
                     "file_name": meta["file_name"],
                     "chunk_index": meta["chunk_index"],
-                    "dedup_key": _dedup_key(ch),
+                    "dedup_key": dk,
                     "chunk_type": "text",
                     "image_url": None,
                     "created": now,
