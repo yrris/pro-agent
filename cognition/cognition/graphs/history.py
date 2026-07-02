@@ -88,13 +88,59 @@ class HistoryReduction:
     dropped_groups: int = field(default=0)
 
 
+# 一张图按固定字符数估价（对齐 HistoryPolicy「max_chars 用字符近似 token」的约定，
+# ~1600 字符 ≈ Anthropic 常规图片 token 量级）。绝不能用 len(base64)：单图 base64
+# 可达数十万字符，会瞬间打爆预算、错误触发裁剪，还会经摘要把 base64 灌回模型。
+IMAGE_CHAR_COST = 1600
+
+# 视为"图片类"的内容块 type（含 M8 的 pro_attachment 引用块——展开前也按图估价）。
+_IMAGE_BLOCK_TYPES = {"image", "image_url", "pro_attachment"}
+
+
 def _text(msg: AnyMessage) -> str:
+    """消息的可见文本（多模态块列表：text 块拼接 + 图片块记 [image] 占位）。
+
+    摘要（_summarize_default 的 gist）与展示都走这里——base64 永不出现在返回值中。
+    """
     c = getattr(msg, "content", "")
-    return c if isinstance(c, str) else str(c)
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        parts: list[str] = []
+        for b in c:
+            if isinstance(b, str):
+                parts.append(b)
+            elif isinstance(b, dict):
+                t = b.get("type")
+                if t == "text":
+                    parts.append(str(b.get("text", "")))
+                elif t in _IMAGE_BLOCK_TYPES:
+                    parts.append("[image]")
+                # 其他块（tool_use 等）不计入可见文本
+        return "".join(parts)
+    return str(c)
+
+
+def _char_cost(msg: AnyMessage) -> int:
+    """预算用的字符成本：文本按长度，图片块按 IMAGE_CHAR_COST 固定估价。"""
+    c = getattr(msg, "content", "")
+    if isinstance(c, list):
+        cost = 0
+        for b in c:
+            if isinstance(b, str):
+                cost += len(b)
+            elif isinstance(b, dict):
+                t = b.get("type")
+                if t == "text":
+                    cost += len(str(b.get("text", "")))
+                elif t in _IMAGE_BLOCK_TYPES:
+                    cost += IMAGE_CHAR_COST
+        return cost
+    return len(_text(msg))
 
 
 def _total_chars(messages: list[AnyMessage]) -> int:
-    return sum(len(_text(m)) for m in messages)
+    return sum(_char_cost(m) for m in messages)
 
 
 def _group_body(body: list[AnyMessage]) -> list[list[AnyMessage]]:

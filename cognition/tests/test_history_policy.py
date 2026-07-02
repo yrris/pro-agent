@@ -128,3 +128,51 @@ def test_think_node_no_policy_passes_through():
     msgs = [SYS, H0, AIMessage(content="x")]
     node({"messages": msgs, "step": 0})
     assert rec.seen == msgs
+
+
+# —— M8：多模态块内容的字符预算与摘要（base64 不得计入预算/漏进摘要）——
+def test_block_content_text_and_image_placeholder():
+    from cognition.graphs.history import IMAGE_CHAR_COST, _char_cost, _text
+
+    fake_b64 = "x" * 200_000  # 模拟一张图的 base64
+    msg = HumanMessage(content=[
+        {"type": "text", "text": "看这张图"},
+        {"type": "image", "source_type": "base64", "data": fake_b64, "mime_type": "image/png"},
+    ])
+    # 可见文本 = text join + [image] 占位，绝不包含 base64。
+    assert _text(msg) == "看这张图[image]"
+    # 字符预算 = 文本长度 + 每图固定估价（不是 len(base64)）。
+    assert _char_cost(msg) == len("看这张图") + IMAGE_CHAR_COST
+
+
+def test_block_content_budget_not_exploded_by_base64():
+    fake_b64 = "y" * 100_000
+    msgs = [
+        SYS,
+        H0,
+        HumanMessage(content=[
+            {"type": "text", "text": "短问题"},
+            {"type": "image", "source_type": "base64", "data": fake_b64, "mime_type": "image/png"},
+        ]),
+        AIMessage(content="短回答"),
+    ]
+    # 预算远大于 文本+1600 但远小于 base64 长度：不得触发裁剪。
+    out = plan_history_reduction(msgs, HistoryPolicy(max_messages=40, max_chars=10_000))
+    assert out.summarized is False and out.messages == msgs
+
+
+def test_summary_never_swallows_base64():
+    fake_b64 = "z" * 50_000
+    old_img = HumanMessage(content=[
+        {"type": "text", "text": "旧图片消息"},
+        {"type": "image", "source_type": "base64", "data": fake_b64, "mime_type": "image/png"},
+    ])
+    filler = []
+    for i in range(30):
+        filler.append(HumanMessage(content=f"问题{i}"))
+        filler.append(AIMessage(content=f"回答{i}"))
+    msgs = [SYS, H0, old_img] + filler
+    out = plan_history_reduction(msgs, HistoryPolicy(max_messages=8, max_chars=2_000))
+    assert out.summarized is True
+    joined = "".join(str(getattr(m, "content", "")) for m in out.messages)
+    assert "zzzz" not in joined, "base64 漏进了摘要/投影"
