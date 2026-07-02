@@ -41,7 +41,7 @@ func (f *fakeArtifacts) Open(_ context.Context, key string) (*artifact.Object, e
 func TestArtifactProxy_Ownership(t *testing.T) {
 	runs := &fakeRuns{runs: map[string]store.Run{"run1": {RunID: "run1", OwnerID: "u1"}}}
 	arts := &fakeArtifacts{objs: map[string][]byte{"run1/tc1/report.md": []byte("# 报告\n14")}}
-	router := api.NewRouter(nil, runs, nil, arts, nil, time.Minute, discardLogger())
+	router := api.NewRouter(nil, runs, nil, nil, arts, nil, time.Minute, discardLogger())
 
 	do := func(path, user string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, path, nil)

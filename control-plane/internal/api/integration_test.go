@@ -90,27 +90,17 @@ func planEvents(runID string) []*agentv1.Event {
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
-// parseSSE 提取所有 `event: message` 帧的 data JSON（跳过心跳）。
-func parseSSE(body string) []map[string]any {
-	var frames []map[string]any
-	for _, block := range strings.Split(body, "\n\n") {
-		if !strings.Contains(block, "event: message") {
-			continue
-		}
-		for _, line := range strings.Split(block, "\n") {
-			if strings.HasPrefix(line, "data: ") {
-				var m map[string]any
-				if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &m); err == nil {
-					frames = append(frames, m)
-				}
-			}
-		}
-	}
-	return frames
+// e2eEnv 端到端测试环境：真实 PG（TEST_PG_DSN，未设则 Skip）+ bufconn 假认知面 + 完整路由。
+// 三个 e2e 测试共用，避免装配代码三份漂移（NewRouter 签名/TRUNCATE 表清单只改一处）。
+type e2eEnv struct {
+	ctx    context.Context
+	runs   store.RunRepository
+	events store.EventRepository
+	router http.Handler
 }
 
-// 全链路：POST /runs → dispatch → hub → store(真实 PG) → SSE；再 GET 回放，断言重放==实时。
-func TestEndToEnd_RunAndReplay(t *testing.T) {
+func newE2EEnv(t *testing.T) *e2eEnv {
+	t.Helper()
 	dsn := os.Getenv("TEST_PG_DSN")
 	if dsn == "" {
 		t.Skip("TEST_PG_DSN 未设置，跳过端到端集成测试")
@@ -146,7 +136,33 @@ func TestEndToEnd_RunAndReplay(t *testing.T) {
 	events := store.NewEventRepository(pool)
 	hub := stream.NewHub(events, time.Hour, discardLogger())
 	d := dispatch.New(4, runs, client, hub, 40, discardLogger())
-	router := api.NewRouter(d, runs, events, nil, nil, time.Minute, discardLogger())
+	router := api.NewRouter(d, runs, store.NewSessionRepository(pool), events, nil, nil, time.Minute, discardLogger())
+	return &e2eEnv{ctx: ctx, runs: runs, events: events, router: router}
+}
+
+// parseSSE 提取所有 `event: message` 帧的 data JSON（跳过心跳）。
+func parseSSE(body string) []map[string]any {
+	var frames []map[string]any
+	for _, block := range strings.Split(body, "\n\n") {
+		if !strings.Contains(block, "event: message") {
+			continue
+		}
+		for _, line := range strings.Split(block, "\n") {
+			if strings.HasPrefix(line, "data: ") {
+				var m map[string]any
+				if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &m); err == nil {
+					frames = append(frames, m)
+				}
+			}
+		}
+	}
+	return frames
+}
+
+// 全链路：POST /runs → dispatch → hub → store(真实 PG) → SSE；再 GET 回放，断言重放==实时。
+func TestEndToEnd_RunAndReplay(t *testing.T) {
+	env := newE2EEnv(t)
+	ctx, runs, events, router := env.ctx, env.runs, env.events, env.router
 
 	// 1) 发起 run，捕获 SSE。
 	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(`{"query":"算 2*(3+4)","sessionId":"s1"}`))
@@ -216,41 +232,8 @@ func TestEndToEnd_RunAndReplay(t *testing.T) {
 
 // 跨 agent_type 回放同构：plan_solve（plan_thought/plan/task/tool_*/result）重放==实时 + 序列不变量。
 func TestEndToEnd_PlanSolveReplay(t *testing.T) {
-	dsn := os.Getenv("TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("TEST_PG_DSN 未设置，跳过端到端集成测试")
-	}
-	ctx := context.Background()
-	pool, err := store.NewPool(ctx, dsn)
-	if err != nil {
-		t.Fatalf("NewPool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	if err := store.Migrate(ctx, pool); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `TRUNCATE events, runs CASCADE`); err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
-
-	lis := bufconn.Listen(1 << 20)
-	gsrv := grpc.NewServer()
-	agentv1.RegisterCognitionServiceServer(gsrv, &fakeCog{})
-	go func() { _ = gsrv.Serve(lis) }()
-	t.Cleanup(gsrv.Stop)
-	conn, err := grpc.NewClient("passthrough:///bufnet",
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		t.Fatalf("grpc client: %v", err)
-	}
-	client := cognition.NewClient(conn)
-
-	runs := store.NewRunRepository(pool)
-	events := store.NewEventRepository(pool)
-	hub := stream.NewHub(events, time.Hour, discardLogger())
-	d := dispatch.New(4, runs, client, hub, 40, discardLogger())
-	router := api.NewRouter(d, runs, events, nil, nil, time.Minute, discardLogger())
+	env := newE2EEnv(t)
+	ctx, runs, events, router := env.ctx, env.runs, env.events, env.router
 
 	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(`{"query":"算 2+3 并汇总","sessionId":"s2","agentType":"plan_solve"}`))
 	req.Header.Set("X-User-Id", "u1")

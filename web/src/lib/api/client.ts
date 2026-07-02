@@ -56,6 +56,43 @@ export async function downloadArtifact(resourceKey: string, fileName: string): P
   URL.revokeObjectURL(url);
 }
 
+// —— M7 会话端点（服务端权威会话列表；proto/SSE 零改动） ——
+
+export interface ServerSession {
+  sessionId: string;
+  title: string;
+  entryAgent: string;
+  runCount: number;
+  createdAt: string; // ISO 8601
+  lastActiveAt: string; // ISO 8601
+}
+
+// 会话列表：GET /sessions（runs 表按 owner 聚合，lastActiveAt 降序）。
+export async function listServerSessions(limit = 50): Promise<ServerSession[]> {
+  const res = await fetch(`/sessions?limit=${limit}`, { headers: headers() });
+  if (!res.ok) throw new Error(`listSessions failed: ${res.status}`);
+  const body = (await res.json()) as { sessions?: ServerSession[] };
+  return body.sessions ?? [];
+}
+
+export interface SessionRunMeta {
+  runId: string;
+  query: string;
+  agentType: string;
+  status: string;
+  finalSummary?: string;
+  errorMsg?: string;
+  createdAt: string; // ISO 8601
+}
+
+// 会话内 run 元数据（created_at 升序）；事件仍走 GET /runs/{id}/events 逐 run 回放。
+export async function listSessionRuns(sessionId: string, signal?: AbortSignal): Promise<SessionRunMeta[]> {
+  const res = await fetch(`/sessions/${encodeURIComponent(sessionId)}/runs`, { headers: headers(), signal });
+  if (!res.ok) throw new Error(`listSessionRuns failed: ${res.status}`);
+  const body = (await res.json()) as { runs?: SessionRunMeta[] };
+  return body.runs ?? [];
+}
+
 export interface HealthReport {
   healthy: boolean;
   checks: Record<string, string>;

@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { PlanView as PlanViewT, RunState, ToolCallView } from "../lib/sse/frameTypes";
 import { Collapsible, Markdown, ProviderTag, ToolStatusBadge } from "./common";
 
@@ -105,7 +106,9 @@ export function ApprovalCardSlot() {
   return null;
 }
 
-export function MessageList({ state, query }: { state: RunState; query?: string }) {
+// memo：多轮 timeline 里历史轮的 props 引用稳定，流式期间只有 live 轮重渲，
+// 每帧渲染成本不随会话长度增长。
+export const MessageList = memo(function MessageList({ state, query }: { state: RunState; query?: string }) {
   const resultByCall = new Map(state.toolResults.map((r) => [r.toolCallId, r.text]));
   return (
     <div className="space-y-3">
@@ -140,4 +143,4 @@ export function MessageList({ state, query }: { state: RunState; query?: string 
       )}
     </div>
   );
-}
+});

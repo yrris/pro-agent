@@ -45,6 +45,7 @@ func main() {
 	defer client.Close()
 
 	runs := store.NewRunRepository(pool)
+	sessions := store.NewSessionRepository(pool)
 	events := store.NewEventRepository(pool)
 
 	artStore, err := artifact.NewMinioStore(cfg.MinioEndpoint, cfg.MinioAccessKey, cfg.MinioSecretKey, cfg.MinioBucket, cfg.MinioUseSSL)
@@ -64,7 +65,7 @@ func main() {
 		"postgres":  func(ctx context.Context) error { return pool.Ping(ctx) },
 		"cognition": client.HealthCheck,
 	}
-	router := api.NewRouter(dispatcher, runs, events, artStore, healthChecks, cfg.RunTimeout, log)
+	router := api.NewRouter(dispatcher, runs, sessions, events, artStore, healthChecks, cfg.RunTimeout, log)
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: router}
 

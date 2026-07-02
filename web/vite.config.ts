@@ -9,6 +9,7 @@ const backend = process.env.VITE_BACKEND || "http://localhost:8080";
 // SSE 走流式透传（Vite 默认不缓冲）。
 const proxy = {
   "/runs": { target: backend, changeOrigin: true },
+  "/sessions": { target: backend, changeOrigin: true },
   "/artifacts": { target: backend, changeOrigin: true },
   "/healthz": { target: backend, changeOrigin: true },
 };

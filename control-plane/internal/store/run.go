@@ -98,14 +98,22 @@ func (r *pgRunRepo) FinishRun(ctx context.Context, p FinishRunParams) error {
 	return nil
 }
 
-func (r *pgRunRepo) GetRun(ctx context.Context, runID string) (Run, error) {
+// runColumns 是 Run 结构的 SELECT 列清单，与 scanRun 的字段顺序一一对应——
+// 加字段时两处同文件同步改，避免 GetRun / ListRunsBySession 各自漂移。
+const runColumns = `run_id, session_id, owner_id, entry_agent, query_text, status,
+       final_summary_text, error_msg, created_at, finished_at`
+
+// scanRun 按 runColumns 顺序扫描一行（QueryRow 的 Row 与 Query 的 Rows 均适用）。
+func scanRun(row interface{ Scan(dest ...any) error }) (Run, error) {
 	var run Run
-	err := r.pool.QueryRow(ctx, `
-		SELECT run_id, session_id, owner_id, entry_agent, query_text, status,
-		       final_summary_text, error_msg, created_at, finished_at
-		  FROM runs WHERE run_id = $1`, runID).
-		Scan(&run.RunID, &run.SessionID, &run.OwnerID, &run.EntryAgent, &run.QueryText, &run.Status,
-			&run.FinalSummaryText, &run.ErrorMsg, &run.CreatedAt, &run.FinishedAt)
+	err := row.Scan(&run.RunID, &run.SessionID, &run.OwnerID, &run.EntryAgent, &run.QueryText, &run.Status,
+		&run.FinalSummaryText, &run.ErrorMsg, &run.CreatedAt, &run.FinishedAt)
+	return run, err
+}
+
+func (r *pgRunRepo) GetRun(ctx context.Context, runID string) (Run, error) {
+	run, err := scanRun(r.pool.QueryRow(ctx,
+		`SELECT `+runColumns+` FROM runs WHERE run_id = $1`, runID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, ErrRunNotFound
 	}

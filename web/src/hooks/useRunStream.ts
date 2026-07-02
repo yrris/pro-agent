@@ -1,27 +1,46 @@
-// 驱动一次 run：startRun/replay → iterFrames → applyFrame → RunState。
+// 驱动一个会话视图：timeline（已完成 RunTurn 列表，含历史回放）+ live（当前流式 run）。
+// M7：单 RunState 升级为 timeline+live——loadSession 在 hook 内完成"取 run 列表→逐 run
+// 回放"（全程同一代际，晚到的旧会话响应不会覆盖新选择）；start() 归档上一轮、只重置
+// live，不清 timeline → 进入历史会话后可直接继续对话。
 // 用 rAF 合并同一动画帧内的多次 applyFrame，避免高频 token 帧引起 DOM 风暴。
+// reducer.applyFrame / parseSSE 纯函数不动（仍是 per-run 归并）。
 
 import { useCallback, useRef, useState } from "react";
-import { replay, startRun } from "../lib/api/client";
+import { listSessionRuns, replay, startRun, type SessionRunMeta } from "../lib/api/client";
 import { iterFrames } from "../lib/api/stream";
 import { applyFrame } from "../lib/sse/reducer";
 import { emptyRunState, type RunState } from "../lib/sse/frameTypes";
 
 export type RunStatus = "idle" | "running" | "done" | "error";
 
-export function useRunStream() {
-  const [state, setState] = useState<RunState>(() => emptyRunState());
-  const [status, setStatus] = useState<RunStatus>("idle");
-  const [error, setError] = useState<string>("");
-  const [replaying, setReplaying] = useState(false);
+// 一轮对话 = 一个 run：用户 query + 归并后的 RunState。
+// failed=true 表示该轮未走到终态（中断/出错/仍在服务端运行），UI 加标记提示。
+export interface RunTurn {
+  runId: string;
+  query: string;
+  state: RunState;
+  failed?: boolean;
+}
 
-  const stateRef = useRef<RunState>(state);
+export function useRunStream() {
+  const [timeline, setTimeline] = useState<RunTurn[]>([]);
+  const [live, setLive] = useState<RunTurn | null>(null);
+  const [status, setStatusState] = useState<RunStatus>("idle");
+  const [error, setError] = useState<string>("");
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  const liveRef = useRef<RunTurn | null>(null);
   const rafRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // 代际计数：start/loadSession/resetAll 各自取新代并 abort 旧流；旧流的迟到回调
+  //（abort 引发的 catch、迟到帧）比对代际后直接丢弃，不得污染新视图。
+  const genRef = useRef(0);
+
+  const setStatus = useCallback((s: RunStatus) => setStatusState(s), []);
 
   const flush = useCallback(() => {
     rafRef.current = null;
-    setState(stateRef.current);
+    setLive(liveRef.current);
   }, []);
 
   const scheduleFlush = useCallback(() => {
@@ -32,76 +51,128 @@ export function useRunStream() {
         : (setTimeout(flush, 16) as unknown as number);
   }, [flush]);
 
-  const reset = useCallback((runId = "") => {
+  // 取新代并掐掉旧流（所有入口统一走这里）。
+  const beginGen = useCallback((): number => {
+    const gen = ++genRef.current;
     abortRef.current?.abort();
-    const s = emptyRunState(runId);
-    stateRef.current = s;
-    setState(s);
-    setError("");
+    return gen;
   }, []);
 
+  // 清空视图（不动代际/abort——由 beginGen 负责）。
+  const clearView = useCallback(() => {
+    liveRef.current = null;
+    setLive(null);
+    setTimeline([]);
+    setStatus("idle");
+    setError("");
+  }, [setStatus]);
+
+  // 把当前 live 轮归档进 timeline（连同失败/未完成标记，query 不丢）。
+  const archiveLive = useCallback(() => {
+    const turn = liveRef.current;
+    if (turn) {
+      setTimeline((t) => [...t, { ...turn, failed: !turn.state.finished }]);
+    }
+    liveRef.current = null;
+    setLive(null);
+  }, []);
+
+  // 清空整个会话视图（新建会话/切到本地草稿会话时用）。
+  const resetAll = useCallback(() => {
+    beginGen();
+    clearView();
+    setLoadingHistory(false);
+  }, [beginGen, clearView]);
+
   const pump = useCallback(
-    async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
+    async (reader: ReadableStreamDefaultReader<Uint8Array>, gen: number) => {
       try {
         for await (const frame of iterFrames(reader)) {
-          stateRef.current = applyFrame(stateRef.current, frame);
+          if (genRef.current !== gen || !liveRef.current) return;
+          liveRef.current = { ...liveRef.current, state: applyFrame(liveRef.current.state, frame) };
           scheduleFlush();
         }
+        if (genRef.current !== gen) return;
         flush();
-        setStatus(stateRef.current.finished ? "done" : "done");
+        setStatus("done");
       } catch (e) {
+        if (genRef.current !== gen) return;
         flush();
         setStatus("error");
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [flush, scheduleFlush],
+    [flush, scheduleFlush, setStatus],
   );
 
+  // 发起新一轮（续聊即复用同一 sessionId：后端 checkpointer 按 thread 续上下文）。
   const start = useCallback(
     async (query: string, agentType: string, sessionId: string): Promise<string> => {
-      reset();
-      setReplaying(false);
+      const gen = beginGen();
+      archiveLive();
+      setError("");
       setStatus("running");
+      liveRef.current = { runId: "", query, state: emptyRunState() };
+      setLive(liveRef.current);
       const ac = new AbortController();
       abortRef.current = ac;
       try {
         const { runId, reader } = await startRun({ query, sessionId, agentType }, ac.signal);
-        stateRef.current = { ...stateRef.current, runId };
-        setState(stateRef.current);
-        void pump(reader);
+        if (genRef.current !== gen) return runId;
+        // 代际未变 ⇒ liveRef 必仍是本轮（置空必伴随代际递增）。
+        liveRef.current = { ...liveRef.current!, runId, state: { ...liveRef.current!.state, runId } };
+        setLive(liveRef.current);
+        void pump(reader, gen);
         return runId;
       } catch (e) {
-        setStatus("error");
-        setError(e instanceof Error ? e.message : String(e));
+        if (genRef.current === gen) {
+          setStatus("error");
+          setError(e instanceof Error ? e.message : String(e));
+        }
         return "";
       }
     },
-    [pump, reset],
+    [archiveLive, beginGen, pump, setStatus],
   );
 
-  const replayRun = useCallback(
-    async (runId: string) => {
-      reset(runId);
-      setReplaying(true);
-      setStatus("running");
+  // 打开历史会话：取 run 列表 → 逐 run 回放（复用与实时同一解析/归并），每回放完一个
+  // run 就上屏一轮；全部载入后 Composer 即可继续输入。失败置 status=error（决不能把
+  // 载入失败静默渲染成"空会话"——用户会在看不见的上下文之上继续对话）。
+  // 返回 run 元数据（组合层用其恢复该会话最近的 agentType 等），失败/被取代返回 null。
+  const loadSession = useCallback(
+    async (sessionId: string): Promise<SessionRunMeta[] | null> => {
+      const gen = beginGen();
+      clearView();
+      setLoadingHistory(true);
       const ac = new AbortController();
       abortRef.current = ac;
       try {
-        const reader = await replay(runId, ac.signal);
-        await pump(reader);
+        const metas = await listSessionRuns(sessionId, ac.signal);
+        if (genRef.current !== gen) return null;
+        const turns: RunTurn[] = [];
+        for (const meta of metas) {
+          let st = emptyRunState(meta.runId);
+          const reader = await replay(meta.runId, ac.signal);
+          for await (const frame of iterFrames(reader)) {
+            st = applyFrame(st, frame);
+          }
+          if (genRef.current !== gen) return null;
+          turns.push({ runId: meta.runId, query: meta.query, state: st, failed: !st.finished });
+          setTimeline([...turns]);
+        }
+        return metas;
       } catch (e) {
-        setStatus("error");
-        setError(e instanceof Error ? e.message : String(e));
+        if (genRef.current === gen && !ac.signal.aborted) {
+          setStatus("error");
+          setError(e instanceof Error ? e.message : String(e));
+        }
+        return null;
+      } finally {
+        if (genRef.current === gen) setLoadingHistory(false);
       }
     },
-    [pump, reset],
+    [beginGen, clearView, setStatus],
   );
 
-  const cancel = useCallback(() => {
-    abortRef.current?.abort();
-    setStatus((s) => (s === "running" ? "idle" : s));
-  }, []);
-
-  return { state, status, error, replaying, start, replayRun, cancel, reset };
+  return { timeline, live, status, error, loadingHistory, start, loadSession, resetAll };
 }

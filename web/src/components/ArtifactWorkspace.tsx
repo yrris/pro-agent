@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
 import { downloadArtifact } from "../lib/api/client";
 import { getUserId } from "../lib/identity";
@@ -35,7 +35,9 @@ function TextPreview({ url }: { url: string }) {
   return <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-black/30 p-3 text-xs text-slate-200">{text}</pre>;
 }
 
-export function ArtifactWorkspace({ artifacts }: { artifacts: ArtifactRef[] }) {
+// memo：ChatView 每个流式帧都会重渲，但 artifacts 数组只在产物变化时换引用，
+// 工作区（含预览 iframe/图片）无关帧不重渲。
+export const ArtifactWorkspace = memo(function ArtifactWorkspace({ artifacts }: { artifacts: ArtifactRef[] }) {
   const [active, setActive] = useState<string | null>(null);
   const current = artifacts.find((a) => a.resourceKey === active) ?? artifacts[artifacts.length - 1];
 
@@ -84,4 +86,4 @@ export function ArtifactWorkspace({ artifacts }: { artifacts: ArtifactRef[] }) {
       )}
     </div>
   );
-}
+});

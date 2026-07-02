@@ -26,6 +26,7 @@ import (
 type handlers struct {
 	dispatcher   *dispatch.Dispatcher
 	runs         store.RunRepository
+	sessions     store.SessionRepository
 	events       store.EventRepository
 	artifacts    artifact.Store
 	healthChecks map[string]health.Check
@@ -34,15 +35,17 @@ type handlers struct {
 }
 
 // NewRouter 装配路由与中间件。artifacts 可为 nil（仅 /artifacts 不可用）；
-// healthChecks 可为 nil（/healthz 退化为「进程存活即 200」）。
-func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, events store.EventRepository, artifacts artifact.Store, healthChecks map[string]health.Check, runTimeout time.Duration, log *slog.Logger) http.Handler {
-	h := &handlers{dispatcher: d, runs: runs, events: events, artifacts: artifacts, healthChecks: healthChecks, runTimeout: runTimeout, log: log}
+// sessions 可为 nil（仅 /sessions 不可用）；healthChecks 可为 nil（/healthz 退化为「进程存活即 200」）。
+func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.SessionRepository, events store.EventRepository, artifacts artifact.Store, healthChecks map[string]health.Check, runTimeout time.Duration, log *slog.Logger) http.Handler {
+	h := &handlers{dispatcher: d, runs: runs, sessions: sessions, events: events, artifacts: artifacts, healthChecks: healthChecks, runTimeout: runTimeout, log: log}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
 	r.Get("/healthz", h.healthz)
 	r.Post("/runs", h.startRun)
 	r.Get("/runs/{runID}/events", h.replay)
+	r.Get("/sessions", h.listSessions)
+	r.Get("/sessions/{sessionID}/runs", h.listSessionRuns)
 	r.Get("/artifacts/*", h.artifact)
 	return r
 }
@@ -52,9 +55,7 @@ func (h *handlers) healthz(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	rep := health.RunChecks(ctx, h.healthChecks)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(rep.HTTPStatus)
-	_ = json.NewEncoder(w).Encode(map[string]any{"healthy": rep.Healthy, "checks": rep.Body})
+	writeJSON(w, rep.HTTPStatus, map[string]any{"healthy": rep.Healthy, "checks": rep.Body})
 }
 
 type startRunRequest struct {
@@ -193,6 +194,100 @@ func (h *handlers) artifact(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, obj.Body)
 }
 
+// —— M7 会话端点（只读投影，proto/SSE 零改动；设计与取舍见 docs/08 §2） ——
+
+// sessionSummaryJSON 是 GET /sessions 的响应行（camelCase，与 SSE 帧字段风格一致）。
+type sessionSummaryJSON struct {
+	SessionID    string    `json:"sessionId"`
+	Title        string    `json:"title"`
+	EntryAgent   string    `json:"entryAgent"`
+	RunCount     int       `json:"runCount"`
+	CreatedAt    time.Time `json:"createdAt"`
+	LastActiveAt time.Time `json:"lastActiveAt"`
+}
+
+// listSessions 返回调用方的会话列表：runs 表按 session_id 聚合，lastActiveAt 降序。
+func (h *handlers) listSessions(w http.ResponseWriter, r *http.Request) {
+	if h.sessions == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "no_session_store", "会话存储未配置")
+		return
+	}
+	limit := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeProblem(w, http.StatusBadRequest, "bad_request", "limit 必须是非负整数")
+			return
+		}
+		limit = n
+	}
+	list, err := h.sessions.ListSessions(r.Context(), ownerOf(r), limit)
+	if err != nil {
+		writeProblem(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	out := make([]sessionSummaryJSON, 0, len(list))
+	for _, s := range list {
+		out = append(out, sessionSummaryJSON{
+			SessionID: s.SessionID, Title: s.Title, EntryAgent: s.EntryAgent,
+			RunCount: s.RunCount, CreatedAt: s.CreatedAt, LastActiveAt: s.LastActiveAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
+}
+
+// sessionRunJSON 是 GET /sessions/{id}/runs 的响应行（run 元数据，不内嵌事件——
+// 前端对每个 run 复用 GET /runs/{runID}/events 回放，保持「回放==实时」单点维护）。
+type sessionRunJSON struct {
+	RunID        string    `json:"runId"`
+	Query        string    `json:"query"`
+	AgentType    string    `json:"agentType"`
+	Status       string    `json:"status"`
+	FinalSummary string    `json:"finalSummary,omitempty"`
+	ErrorMsg     string    `json:"errorMsg,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// listSessionRuns 返回会话内 run 元数据（created_at 升序）。owner 过滤在 SQL 里，
+// 他人会话与不存在的会话同样返回空 → 统一 404，不泄露存在性。
+func (h *handlers) listSessionRuns(w http.ResponseWriter, r *http.Request) {
+	if h.sessions == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "no_session_store", "会话存储未配置")
+		return
+	}
+	sessionID := chi.URLParam(r, "sessionID")
+	runs, err := h.sessions.ListRunsBySession(r.Context(), ownerOf(r), sessionID)
+	if err != nil {
+		writeProblem(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if len(runs) == 0 {
+		writeProblem(w, http.StatusNotFound, "not_found", "会话不存在")
+		return
+	}
+	out := make([]sessionRunJSON, 0, len(runs))
+	for _, run := range runs {
+		j := sessionRunJSON{
+			RunID: run.RunID, Query: run.QueryText, AgentType: run.EntryAgent,
+			Status: run.Status, CreatedAt: run.CreatedAt,
+		}
+		if run.FinalSummaryText != nil {
+			j.FinalSummary = *run.FinalSummaryText
+		}
+		if run.ErrorMsg != nil {
+			j.ErrorMsg = *run.ErrorMsg
+		}
+		out = append(out, j)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessionId": sessionID, "runs": out})
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
 // ownerOf 解析调用方身份（本阶段单用户：X-User-Id 头，缺省 anonymous）。多租户/RBAC 留待拓展。
 func ownerOf(r *http.Request) string {
 	if v := r.Header.Get("X-User-Id"); v != "" {
@@ -202,10 +297,8 @@ func ownerOf(r *http.Request) string {
 }
 
 func writeProblem(w http.ResponseWriter, status int, code, msg string) {
-	w.Header().Set("Content-Type", "application/json")
 	if status == http.StatusTooManyRequests {
 		w.Header().Set("Retry-After", "1")
 	}
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "message": msg})
+	writeJSON(w, status, map[string]string{"code": code, "message": msg})
 }
