@@ -1,33 +1,133 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Loader2, Paperclip, RotateCw, X } from "lucide-react";
 import { MessageList } from "../components/chat";
 import { ArtifactWorkspace } from "../components/ArtifactWorkspace";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
 import type { RunStatus, RunTurn } from "../hooks/useRunStream";
 import { SAMPLE_QUESTIONS } from "../config";
+import { uploadFile, type AttachmentRef } from "../lib/api/client";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+
+// 附件条目：选文件即上传（run body 只带引用），失败可重试。
+interface PendingAttachment {
+  id: string;
+  file: File;
+  status: "uploading" | "done" | "error";
+  ref?: AttachmentRef;
+}
+
+const ACCEPT = ".png,.jpg,.jpeg,.webp,.gif,.txt,.md,.markdown,.csv,.json,.xml,.yaml,.yml,.log,.pdf";
+
+function AttachmentChips({
+  items,
+  onRemove,
+  onRetry,
+}: {
+  items: PendingAttachment[];
+  onRemove: (id: string) => void;
+  onRetry: (id: string) => void;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <div className="mb-2 flex flex-wrap gap-1.5">
+      {items.map((a) => (
+        <Badge
+          key={a.id}
+          variant="outline"
+          className={`gap-1 font-normal ${a.status === "error" ? "border-rose-500/40 text-rose-300" : "text-slate-300"}`}
+        >
+          {a.status === "uploading" && <Loader2 className="animate-spin" />}
+          <span className="max-w-40 truncate">{a.file.name}</span>
+          {a.status === "error" && (
+            <button onClick={() => onRetry(a.id)} title="上传失败，点击重试" className="hover:text-rose-100">
+              <RotateCw className="size-3" />
+            </button>
+          )}
+          <button onClick={() => onRemove(a.id)} title="移除" className="hover:text-slate-100">
+            <X className="size-3" />
+          </button>
+        </Badge>
+      ))}
+    </div>
+  );
+}
 
 function Composer({
   disabled,
   placeholder,
   onSubmit,
+  uploadSessionId,
 }: {
   disabled: boolean;
   placeholder: string;
-  onSubmit: (q: string) => void;
+  onSubmit: (q: string, attachments?: AttachmentRef[]) => void;
+  uploadSessionId: string;
 }) {
   const [text, setText] = useState("");
+  const [atts, setAtts] = useState<PendingAttachment[]>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const doUpload = (item: PendingAttachment) => {
+    setAtts((xs) => xs.map((x) => (x.id === item.id ? { ...x, status: "uploading" } : x)));
+    uploadFile(item.file, uploadSessionId)
+      .then((ref) =>
+        setAtts((xs) => xs.map((x) => (x.id === item.id ? { ...x, status: "done", ref } : x))),
+      )
+      .catch(() =>
+        setAtts((xs) => xs.map((x) => (x.id === item.id ? { ...x, status: "error" } : x))),
+      );
+  };
+
+  const onPick = (files: FileList | null) => {
+    for (const f of Array.from(files ?? [])) {
+      const item: PendingAttachment = { id: `${Date.now()}-${f.name}`, file: f, status: "uploading" };
+      setAtts((xs) => [...xs, item]);
+      doUpload(item);
+    }
+    if (fileRef.current) fileRef.current.value = ""; // 允许再次选择同一文件
+  };
+
+  const uploading = atts.some((a) => a.status === "uploading");
   const submit = () => {
     const q = text.trim();
-    if (!q || disabled) return;
-    onSubmit(q);
+    if (!q || disabled || uploading) return;
+    const refs = atts.filter((a) => a.status === "done" && a.ref).map((a) => a.ref!) ;
+    onSubmit(q, refs.length ? refs : undefined);
     setText("");
+    setAtts([]);
   };
   return (
     <div className="border-t p-3">
+      <AttachmentChips
+        items={atts}
+        onRemove={(id) => setAtts((xs) => xs.filter((x) => x.id !== id))}
+        onRetry={(id) => {
+          const item = atts.find((x) => x.id === id);
+          if (item) doUpload(item);
+        }}
+      />
       <div className="flex items-end gap-2">
-        {/* M8 座位：附件按钮与文件 chips 加在 Textarea 左侧；M9 座位：输出格式选择器加在发送按钮左侧 */}
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          accept={ACCEPT}
+          className="hidden"
+          onChange={(e) => onPick(e.target.files)}
+        />
+        <Button
+          variant="ghost"
+          size="icon"
+          title="上传附件（图片进多模态；文本/PDF 自动入个人知识库可检索）"
+          disabled={disabled}
+          onClick={() => fileRef.current?.click()}
+        >
+          <Paperclip />
+        </Button>
+        {/* M9 座位：输出格式选择器加在发送按钮左侧 */}
         <Textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -46,8 +146,8 @@ function Composer({
           disabled={disabled}
           className="min-h-0 flex-1 resize-none"
         />
-        <Button onClick={submit} disabled={disabled} className="rounded-xl px-4">
-          发送
+        <Button onClick={submit} disabled={disabled || uploading} className="rounded-xl px-4">
+          {uploading ? "上传中…" : "发送"}
         </Button>
       </div>
     </div>
@@ -62,12 +162,14 @@ export function ChatView({
   status,
   loadingHistory,
   onSubmit,
+  uploadSessionId,
 }: {
   timeline: RunTurn[];
   live: RunTurn | null;
   status: RunStatus;
   loadingHistory: boolean;
-  onSubmit: (q: string) => void;
+  onSubmit: (q: string, attachments?: AttachmentRef[]) => void;
+  uploadSessionId: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -115,7 +217,7 @@ export function ChatView({
             <div className="mx-auto max-w-3xl">
               {timeline.map((turn) => (
                 <div key={turn.runId} className="mb-6">
-                  <MessageList state={turn.state} query={turn.query} />
+                  <MessageList state={turn.state} query={turn.query} attachments={turn.attachments} />
                   {turn.failed && (
                     <div className="mt-1 text-xs text-amber-400">
                       ⚠ 此轮未走到终态（中断/出错/仍在运行），仅展示已落库部分
@@ -123,7 +225,7 @@ export function ChatView({
                   )}
                 </div>
               ))}
-              {live && <MessageList state={live.state} query={live.query} />}
+              {live && <MessageList state={live.state} query={live.query} attachments={live.attachments} />}
               {loadingHistory && (
                 <div className="mt-3 space-y-2">
                   <div className="text-sm text-slate-500 pulse-dot">● 载入历史会话…</div>
@@ -138,7 +240,12 @@ export function ChatView({
             </div>
           )}
         </div>
-        <Composer disabled={composerDisabled} placeholder={placeholder} onSubmit={onSubmit} />
+        <Composer
+          disabled={composerDisabled}
+          placeholder={placeholder}
+          onSubmit={onSubmit}
+          uploadSessionId={uploadSessionId}
+        />
       </div>
       <div className="hidden w-96 shrink-0 border-l lg:block">
         <ArtifactWorkspace artifacts={artifacts} />

@@ -6,7 +6,7 @@ import { LoginView } from "./views/LoginView";
 import { ChatView } from "./views/ChatView";
 import { Header } from "./components/Header";
 import { Sidebar } from "./components/Sidebar";
-import { listServerSessions, type ServerSession } from "./lib/api/client";
+import { listServerSessions, type AttachmentRef, type ServerSession } from "./lib/api/client";
 import {
   createSession,
   listSessions as listLocalSessions,
@@ -92,9 +92,9 @@ export default function App() {
   }, [currentSessionId, agentType]);
 
   const onSubmit = useCallback(
-    async (q: string) => {
+    async (q: string, attachments?: AttachmentRef[]) => {
       const sid = ensureSessionId();
-      const runId = await run.start(q, agentType, sid);
+      const runId = await run.start(q, agentType, sid, attachments);
       if (runId) void refreshSessions(); // run 已落库：标题/runCount/lastActiveAt 即时更新
     },
     [ensureSessionId, agentType, run, refreshSessions],
@@ -138,6 +138,7 @@ export default function App() {
           status={run.status}
           loadingHistory={run.loadingHistory}
           onSubmit={onSubmit}
+          uploadSessionId={currentSessionId ?? ""}
         />
       </div>
     </div>

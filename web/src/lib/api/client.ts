@@ -8,10 +8,19 @@ function headers(json = false): Record<string, string> {
   return h;
 }
 
+// 已上传附件的引用（POST /uploads 的返回；run body 只带引用不带字节）。
+export interface AttachmentRef {
+  resourceKey: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+}
+
 export interface StartRunArgs {
   query: string;
   sessionId: string;
   agentType: string; // "react" | "plan_solve"
+  attachments?: AttachmentRef[];
 }
 
 export interface RunHandle {
@@ -39,6 +48,25 @@ export async function replay(runId: string, signal?: AbortSignal): Promise<Reada
   const res = await fetch(`/runs/${encodeURIComponent(runId)}/events`, { headers: headers(), signal });
   if (!res.ok || !res.body) throw new Error(`replay failed: ${res.status}`);
   return res.body.getReader();
+}
+
+// 上传附件：multipart POST /uploads。注意 headers() 必须**无参**调用——绝不能手动设
+// Content-Type，浏览器需自动生成 multipart boundary。
+export async function uploadFile(
+  file: File,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<AttachmentRef> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch(`/uploads?sessionId=${encodeURIComponent(sessionId)}`, {
+    method: "POST",
+    headers: headers(),
+    body: fd,
+    signal,
+  });
+  if (!res.ok) throw new Error(`upload failed: ${res.status}`);
+  return (await res.json()) as AttachmentRef;
 }
 
 // 下载 artifact：必须带 X-User-Id（owner 校验），故用 fetch→blob→a[download]，不能裸 <a href>。

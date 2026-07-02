@@ -1,4 +1,6 @@
 import { memo } from "react";
+import { Paperclip } from "lucide-react";
+import type { AttachmentRef } from "../lib/api/client";
 import type { PlanView as PlanViewT, RunState, ToolCallView } from "../lib/sse/frameTypes";
 import { Collapsible, Markdown, ProviderTag, ToolStatusBadge } from "./common";
 import { Badge } from "@/components/ui/badge";
@@ -112,13 +114,37 @@ export function ApprovalCardSlot() {
   return null;
 }
 
+// 发送轮的附件 chips（挂在用户气泡下方；历史回放轮无附件元数据=已知限制）。
+function AttachmentRow({ attachments }: { attachments?: AttachmentRef[] }) {
+  if (!attachments?.length) return null;
+  return (
+    <div className="flex flex-wrap justify-end gap-1.5">
+      {attachments.map((a) => (
+        <Badge key={a.resourceKey} variant="outline" className="gap-1 font-normal text-slate-400">
+          <Paperclip className="size-3" />
+          <span className="max-w-40 truncate">{a.fileName}</span>
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
 // memo：多轮 timeline 里历史轮的 props 引用稳定，流式期间只有 live 轮重渲，
 // 每帧渲染成本不随会话长度增长。
-export const MessageList = memo(function MessageList({ state, query }: { state: RunState; query?: string }) {
+export const MessageList = memo(function MessageList({
+  state,
+  query,
+  attachments,
+}: {
+  state: RunState;
+  query?: string;
+  attachments?: AttachmentRef[];
+}) {
   const resultByCall = new Map(state.toolResults.map((r) => [r.toolCallId, r.text]));
   return (
     <div className="space-y-3">
       {query && <UserBubble text={query} />}
+      <AttachmentRow attachments={attachments} />
       {state.order.map((entry, idx) => {
         const k = `${entry.kind}:${entry.key}:${idx}`;
         switch (entry.kind) {

@@ -6,7 +6,13 @@
 // reducer.applyFrame / parseSSE 纯函数不动（仍是 per-run 归并）。
 
 import { useCallback, useRef, useState } from "react";
-import { listSessionRuns, replay, startRun, type SessionRunMeta } from "../lib/api/client";
+import {
+  listSessionRuns,
+  replay,
+  startRun,
+  type AttachmentRef,
+  type SessionRunMeta,
+} from "../lib/api/client";
 import { iterFrames } from "../lib/api/stream";
 import { applyFrame } from "../lib/sse/reducer";
 import { emptyRunState, type RunState } from "../lib/sse/frameTypes";
@@ -15,11 +21,13 @@ export type RunStatus = "idle" | "running" | "done" | "error";
 
 // 一轮对话 = 一个 run：用户 query + 归并后的 RunState。
 // failed=true 表示该轮未走到终态（中断/出错/仍在服务端运行），UI 加标记提示。
+// attachments 仅当前会话的实时轮携带（历史回放轮无附件元数据=已知限制，M8 记录）。
 export interface RunTurn {
   runId: string;
   query: string;
   state: RunState;
   failed?: boolean;
+  attachments?: AttachmentRef[];
 }
 
 export function useRunStream() {
@@ -107,17 +115,25 @@ export function useRunStream() {
 
   // 发起新一轮（续聊即复用同一 sessionId：后端 checkpointer 按 thread 续上下文）。
   const start = useCallback(
-    async (query: string, agentType: string, sessionId: string): Promise<string> => {
+    async (
+      query: string,
+      agentType: string,
+      sessionId: string,
+      attachments?: AttachmentRef[],
+    ): Promise<string> => {
       const gen = beginGen();
       archiveLive();
       setError("");
       setStatus("running");
-      liveRef.current = { runId: "", query, state: emptyRunState() };
+      liveRef.current = { runId: "", query, state: emptyRunState(), attachments };
       setLive(liveRef.current);
       const ac = new AbortController();
       abortRef.current = ac;
       try {
-        const { runId, reader } = await startRun({ query, sessionId, agentType }, ac.signal);
+        const { runId, reader } = await startRun(
+          { query, sessionId, agentType, attachments },
+          ac.signal,
+        );
         if (genRef.current !== gen) return runId;
         // 代际未变 ⇒ liveRef 必仍是本轮（置空必伴随代际递增）。
         liveRef.current = { ...liveRef.current!, runId, state: { ...liveRef.current!.state, runId } };
