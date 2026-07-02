@@ -1,6 +1,8 @@
 # ===== 不提交的项目内文档与上下文 =====
 docs/
 CLAUDE.md
+PLAN_STATUS.md
+.claude/
 
 # ===== 环境与密钥 =====
 .env
@@ -26,6 +28,7 @@ venv/
 .mypy_cache/
 
 # ===== 前端 =====
+*.tsbuildinfo
 /web/node_modules/
 /web/dist/
 /web/.vite/
