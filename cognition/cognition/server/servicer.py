@@ -28,6 +28,23 @@ logger = logging.getLogger(__name__)
 AGENT_TYPE_PLAN_SOLVE = "plan_solve"
 
 
+def resolve_kb_id(request) -> str:
+    """解析本 run 的知识库归属（纯函数，单点解析后经 config metadata 供
+    knowledge_search 与附件入库共用）。
+
+    owner 级优先（`owner:{owner_id}`，Go 经 RunRequest.metadata["owner_id"] 传入）：
+    用户上传的文档跨会话可检索（"用户自有知识库"语义）。无 owner（旧 Go/直连
+    gRPC）回退会话级 `sess:{session_id}`。**绝不返回空串**——kb_id=="" 在检索层
+    意味着无隔离全库查询。
+    """
+    meta = getattr(request, "metadata", None) or {}
+    owner = str(meta.get("owner_id", "") or "")
+    if owner:
+        return f"owner:{owner}"
+    sid = str(getattr(request, "session_id", "") or getattr(request, "run_id", "") or "run")
+    return f"sess:{sid}"
+
+
 class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
     """一次 run = 一个 server-streaming RPC。按 agent_type 选图。"""
 
@@ -86,7 +103,14 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
 
         mapper = EventMapper(run_id, self.tool_providers)
         graph, state, recursion = self._build(request)
-        metadata = {"request_id": run_id, "run_id": run_id, "session_id": session_id}
+        # kb_id 单点解析进 metadata：knowledge_search（config 优先）与附件入库共用；
+        # plan_solve 的 executor 分支经 child_config metadata spread 自动透传。
+        metadata = {
+            "request_id": run_id,
+            "run_id": run_id,
+            "session_id": session_id,
+            "kb_id": resolve_kb_id(request),
+        }
         config = {
             "configurable": {"thread_id": session_id},
             "recursion_limit": recursion,

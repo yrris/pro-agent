@@ -74,3 +74,50 @@ async def test_tool_result_maps_to_artifact_refs():
     refs = tool_results[0].tool_result.artifact_refs
     assert refs and refs[0].file_name == "search-results.md"
     assert tool_results[0].tool_result.tool_provider == "local"
+
+
+# —— M8：kb 归属线程化（config 优先，防 LLM 注入/幻觉跨 owner 检索）——
+class _SpySubgraph:
+    """记录 ainvoke 入参的假子图（直测 kb 解析，不跑 RAG 机器）。"""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def ainvoke(self, state: dict) -> dict:
+        self.calls.append(dict(state))
+        return {"answer": "ok", "sources": []}
+
+
+async def test_kb_id_config_priority_over_llm_arg():
+    """config metadata 的 kb_id 必须压过 LLM 填的入参——kb_id 是模型可见参数，
+    被提示注入/幻觉填成别人的 kb 也不能越权检索。"""
+    spy = _SpySubgraph()
+    tool = build_knowledge_search_tool(spy, Settings(embedding_dimension=DIM))
+    await tool.ainvoke(
+        {"args": {"query": "q", "kb_id": "owner:别人"},
+         "id": "c1", "name": "knowledge_search", "type": "tool_call"},
+        config={"metadata": {"kb_id": "owner:我"}},
+    )
+    assert spy.calls[0]["kb_id"] == "owner:我"
+
+
+async def test_kb_id_falls_back_to_arg_without_config():
+    spy = _SpySubgraph()
+    tool = build_knowledge_search_tool(spy, Settings(embedding_dimension=DIM))
+    await tool.ainvoke(
+        {"args": {"query": "q", "kb_id": "kb-manual"},
+         "id": "c2", "name": "knowledge_search", "type": "tool_call"}
+    )
+    assert spy.calls[0]["kb_id"] == "kb-manual"
+
+
+def test_resolve_kb_id():
+    from cognition.server.servicer import resolve_kb_id
+
+    req = SimpleNamespace(metadata={"owner_id": "u1"}, session_id="s1", run_id="r1")
+    assert resolve_kb_id(req) == "owner:u1"
+    # 无 owner（旧 Go/直连 gRPC）→ 回退会话级，绝不返回 ""（空串=全库无隔离）。
+    req2 = SimpleNamespace(metadata={}, session_id="s1", run_id="r1")
+    assert resolve_kb_id(req2) == "sess:s1"
+    req3 = SimpleNamespace(metadata=None, session_id="", run_id="r9")
+    assert resolve_kb_id(req3) == "sess:r9"

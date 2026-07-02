@@ -20,6 +20,14 @@ _FILE_NAME = "search-results.md"
 _MIME = "text/markdown"
 
 
+def _kb_id_from_config(config: Optional[RunnableConfig]) -> str:
+    """从 RunnableConfig.metadata 取当前 run 的 kb_id（servicer 注入，工具层只读）。"""
+    if not config:
+        return ""
+    meta = config.get("metadata") or {}
+    return str(meta.get("kb_id") or "")
+
+
 def build_knowledge_search_tool(subgraph: Any, settings: Settings) -> BaseTool:
     """用编译好的 RAG 子图构建 knowledge_search 工具（装配期一次）。"""
 
@@ -29,8 +37,15 @@ def build_knowledge_search_tool(subgraph: Any, settings: Settings) -> BaseTool:
         tool_call_id: Annotated[str, InjectedToolCallId] = "",
         config: RunnableConfig = None,  # type: ignore[assignment]
     ) -> tuple[str, Optional[dict]]:
-        """在知识库中检索并基于证据作答。当问题需要事实/文档依据时使用。"""
-        result = await subgraph.ainvoke({"query": query, "kb_id": kb_id})
+        """在知识库中检索并基于证据作答。当问题需要事实/文档依据时使用。
+
+        kb_id 通常无需填写：系统会自动定位当前用户的知识库（上传的文档都在其中）。
+        """
+        # 安全：config（servicer 注入的 owner kb）优先于 LLM 填的入参——kb_id 是模型
+        # 可见参数，被提示注入/幻觉填成他人 kb 也不能越权检索；无 config 时（离线
+        # 测试/脚本直调）才用入参。
+        kb = _kb_id_from_config(config) or kb_id
+        result = await subgraph.ainvoke({"query": query, "kb_id": kb})
         answer = str(result.get("answer", "") or "")
         sources = result.get("sources", []) or []
 
