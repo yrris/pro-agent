@@ -14,6 +14,8 @@ import {
   pruneSessions,
   type SessionMeta,
 } from "./lib/sessions";
+import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 export default function App() {
   const { userId, isAuthed, login, logout } = useAuth();
@@ -113,7 +115,9 @@ export default function App() {
 
   if (!isAuthed) return <LoginView onLogin={login} />;
   return (
+    <TooltipProvider delayDuration={200}>
     <div className="flex h-full flex-col">
+      <Toaster position="top-center" />
       <Header
         agentType={agentType}
         onAgentType={setAgentType}
@@ -137,5 +141,6 @@ export default function App() {
         />
       </div>
     </div>
+    </TooltipProvider>
   );
 }
