@@ -1,7 +1,59 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
+/* —— shadcn 设计 token（按 M6 手写配色逐一映射，暗色为唯一主题） ——
+   background/foreground = 原 body 色；primary = 原 cyan-600 按钮；border/input =
+   原 border-white/10；popover 必须不透明（Select/Tooltip 浮层叠在内容上）；
+   radius=0.75rem 对齐原主导圆角 rounded-xl。语义色（emerald/rose/blue/indigo/
+   violet/amber）不 token 化，留在组件里做字面 utilities。 */
 :root {
-  color-scheme: light dark;
+  color-scheme: dark; /* 唯一主题为暗色：原生控件/滚动条不再跟随系统走浅色 */
+  --background: #0b1020;
+  --foreground: #e6e9f0;
+  --card: rgba(255, 255, 255, 0.03);
+  --card-foreground: #e6e9f0;
+  --popover: #0f172a;
+  --popover-foreground: #cbd5e1;
+  --primary: #0891b2;
+  --primary-foreground: #ffffff;
+  --secondary: rgba(255, 255, 255, 0.05);
+  --secondary-foreground: #cbd5e1;
+  --muted: rgba(255, 255, 255, 0.04);
+  --muted-foreground: #94a3b8;
+  --accent: rgba(255, 255, 255, 0.08);
+  --accent-foreground: #e6e9f0;
+  --destructive: #f43f5e;
+  --destructive-foreground: #ffffff;
+  --border: rgba(255, 255, 255, 0.1);
+  --input: rgba(255, 255, 255, 0.1);
+  --ring: #06b6d4;
+  --radius: 0.75rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
 }
 
 html,
@@ -13,8 +65,8 @@ body,
 
 body {
   font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  background: #0b1020;
-  color: #e6e9f0;
+  background: var(--background);
+  color: var(--foreground);
 }
 
 /* 细腻滚动条 */
