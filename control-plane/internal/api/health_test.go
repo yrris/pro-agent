@@ -15,7 +15,7 @@ import (
 
 func getHealthz(t *testing.T, checks map[string]health.Check) (*httptest.ResponseRecorder, map[string]any) {
 	t.Helper()
-	router := api.NewRouter(nil, nil, nil, nil, nil, checks, time.Minute, discardLogger())
+	router := api.NewRouter(nil, nil, nil, nil, nil, checks, time.Minute, "", discardLogger())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	var body map[string]any

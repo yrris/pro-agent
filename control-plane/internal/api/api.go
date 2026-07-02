@@ -35,8 +35,9 @@ type handlers struct {
 }
 
 // NewRouter 装配路由与中间件。artifacts 可为 nil（仅 /artifacts 不可用）；
-// sessions 可为 nil（仅 /sessions 不可用）；healthChecks 可为 nil（/healthz 退化为「进程存活即 200」）。
-func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.SessionRepository, events store.EventRepository, artifacts artifact.Store, healthChecks map[string]health.Check, runTimeout time.Duration, log *slog.Logger) http.Handler {
+// sessions 可为 nil（仅 /sessions 不可用）；healthChecks 可为 nil（/healthz 退化为「进程存活即 200」）；
+// webDir 非空时经 NotFound 托管前端静态资源 + SPA 回退（已注册 API 路由优先匹配，零冲突）。
+func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.SessionRepository, events store.EventRepository, artifacts artifact.Store, healthChecks map[string]health.Check, runTimeout time.Duration, webDir string, log *slog.Logger) http.Handler {
 	h := &handlers{dispatcher: d, runs: runs, sessions: sessions, events: events, artifacts: artifacts, healthChecks: healthChecks, runTimeout: runTimeout, log: log}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -47,6 +48,9 @@ func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.
 	r.Get("/sessions", h.listSessions)
 	r.Get("/sessions/{sessionID}/runs", h.listSessionRuns)
 	r.Get("/artifacts/*", h.artifact)
+	if webDir != "" {
+		r.NotFound(spaHandler(webDir))
+	}
 	return r
 }
 

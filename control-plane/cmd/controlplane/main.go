@@ -65,7 +65,7 @@ func main() {
 		"postgres":  func(ctx context.Context) error { return pool.Ping(ctx) },
 		"cognition": client.HealthCheck,
 	}
-	router := api.NewRouter(dispatcher, runs, sessions, events, artStore, healthChecks, cfg.RunTimeout, log)
+	router := api.NewRouter(dispatcher, runs, sessions, events, artStore, healthChecks, cfg.RunTimeout, cfg.WebDir, log)
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: router}
 
