@@ -149,6 +149,106 @@ class MinioDownloader:
         return data
 
 
+# —— 上传附件 → 知识库（run 前同步入库，read-your-writes）——
+
+# 文本类判定（进知识库的内容源）：mime 前缀/精确匹配 + 扩展名兜底（浏览器对 md/csv
+# 的 mime 报告不稳定）。
+_TEXT_MIME_EXACT = {"application/json", "application/x-ndjson", "application/xml"}
+_TEXT_EXTS = {".txt", ".md", ".markdown", ".csv", ".json", ".log", ".xml", ".yaml", ".yml"}
+PDF_MIME = "application/pdf"
+
+# 单文件入库文本上限（约 200k 字符）：防超大文档拖慢 run 启动；超限截断并注记。
+MAX_INGEST_CHARS = 200_000
+
+
+def is_text_like(mime: str, file_name: str = "") -> bool:
+    m = (mime or "").lower()
+    if m.startswith("text/") or m in _TEXT_MIME_EXACT:
+        return True
+    name = (file_name or "").lower()
+    return any(name.endswith(ext) for ext in _TEXT_EXTS)
+
+
+def is_pdf(mime: str, file_name: str = "") -> bool:
+    return (mime or "").lower() == PDF_MIME or (file_name or "").lower().endswith(".pdf")
+
+
+def extract_text(data: bytes, mime: str, file_name: str = "") -> Optional[str]:
+    """从附件字节提取纯文本；不可提取/失败返回 None（调用方跳过，不炸 run）。"""
+    if is_pdf(mime, file_name):
+        try:
+            import io
+
+            from pypdf import PdfReader  # 惰性：未装/损坏 pdf 都降级
+
+            reader = PdfReader(io.BytesIO(data))
+            pages = [(p.extract_text() or "") for p in reader.pages]
+            text = "\n".join(pages).strip()
+            return text or None
+        except Exception as exc:  # noqa: BLE001 — pdf 解析失败降级跳过
+            logger.warning("pdf text extract failed for %s: %s", file_name, exc)
+            return None
+    if is_text_like(mime, file_name):
+        try:
+            return data.decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            return None
+    return None
+
+
+def build_ingestor(
+    settings: Optional[Settings] = None,
+    *,
+    downloader: Optional[Callable[[str], bytes]] = None,
+    store: Any = None,
+    embedder: Any = None,
+    sparse: Any = None,
+) -> Callable[[list[dict], str], list[str]]:
+    """构建附件入库器（装配期一次；I/O 依赖可注入供离线测试）。
+
+    返回同步可调用 `(att_dicts, kb_id) -> 入库文件名列表`——servicer 在 Run 里经
+    `asyncio.to_thread` 调用（embedder/下载同步阻塞，绝不能在 grpc.aio 事件循环上裸跑）。
+    幂等：`ingest(stable_ids=True)` 内容寻址，同文件重传/重试不重复入库。
+    """
+    settings = settings or get_settings()
+    if store is None or embedder is None or sparse is None:
+        from cognition.rag.factory import build_embedder, build_sparse, build_store
+
+        store = store or build_store(settings)
+        embedder = embedder or build_embedder(settings)
+        sparse = sparse or build_sparse(settings)
+    dl = downloader or MinioDownloader(settings)
+
+    def _ingest_attachments(attachments: list[dict], kb_id: str) -> list[str]:
+        from cognition.rag.ingest import ingest
+
+        if not kb_id:
+            return []  # kb_id 空=无隔离全库，宁可不入
+        docs: list[dict] = []
+        names: list[str] = []
+        for a in attachments or []:
+            mime, fname = a.get("mime_type", ""), a.get("file_name", "")
+            if not (is_text_like(mime, fname) or is_pdf(mime, fname)):
+                continue  # 图片等非文本：走多模态/占位路径，不进知识库
+            try:
+                data = dl(a["resource_key"])
+            except Exception as exc:  # noqa: BLE001 — 单文件失败不拖垮其余
+                logger.warning("attachment download failed for ingest %s: %s", a.get("resource_key"), exc)
+                continue
+            text = extract_text(data, mime, fname)
+            if not text or not text.strip():
+                continue
+            if len(text) > MAX_INGEST_CHARS:
+                text = text[:MAX_INGEST_CHARS] + "\n…（超长截断）"
+            docs.append({"text": text, "file_name": fname, "source_id": a["resource_key"]})
+            names.append(fname)
+        if docs:
+            ingest(docs, kb_id, store=store, embedder=embedder, sparse=sparse, stable_ids=True)
+        return names
+
+    return _ingest_attachments
+
+
 def _placeholder_block(file_name: str, reason: str) -> dict:
     return {"type": "text", "text": f"[图片附件 {file_name}（{reason}，未注入图像内容）]"}
 
