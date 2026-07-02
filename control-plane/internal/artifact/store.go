@@ -23,9 +23,11 @@ type Object struct {
 	Size        int64
 }
 
-// Store 是产物读取端口（便于测试用假实现）。
+// Store 是产物读写端口（便于测试用假实现）。Put 为 M8 上传链路加性新增：
+// Go 只负责落对象与鉴权，内容消费（多模态/入库）在认知面按 key 直读。
 type Store interface {
 	Open(ctx context.Context, key string) (*Object, error)
+	Put(ctx context.Context, key string, body io.Reader, size int64, contentType string) error
 	EnsureBucket(ctx context.Context) error
 }
 
@@ -55,6 +57,17 @@ func (s *minioStore) EnsureBucket(ctx context.Context) error {
 		if err := s.client.MakeBucket(ctx, s.bucket, minio.MakeBucketOptions{}); err != nil {
 			return fmt.Errorf("artifact: make bucket: %w", err)
 		}
+	}
+	return nil
+}
+
+func (s *minioStore) Put(ctx context.Context, key string, body io.Reader, size int64, contentType string) error {
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	if _, err := s.client.PutObject(ctx, s.bucket, key, body, size,
+		minio.PutObjectOptions{ContentType: contentType}); err != nil {
+		return fmt.Errorf("artifact: put object: %w", err)
 	}
 	return nil
 }

@@ -17,13 +17,22 @@ import (
 // ErrBusy 表示并发已达上限（背压）。上层应回 429“系统繁忙”。
 var ErrBusy = errors.New("dispatch: system busy")
 
+// Attachment 是已上传附件的引用（key 归属已在 api 层校验）。
+type Attachment struct {
+	ResourceKey string
+	FileName    string
+	MimeType    string
+	Size        int64
+}
+
 // StartCommand 是一次 run 的启动入参。
 type StartCommand struct {
-	RunID     string
-	SessionID string
-	OwnerID   string
-	Query     string
-	AgentType string // "react" | "plan_solve"
+	RunID       string
+	SessionID   string
+	OwnerID     string
+	Query       string
+	AgentType   string // "react" | "plan_solve"
+	Attachments []Attachment
 }
 
 // Dispatcher 持有并发闸与运行时协作者。
@@ -84,8 +93,13 @@ func (d *Dispatcher) Run(ctx context.Context, cmd StartCommand, sink stream.Sink
 
 	finCtx := context.WithoutCancel(ctx)
 
+	atts := make([]cognition.Attachment, 0, len(cmd.Attachments))
+	for _, a := range cmd.Attachments {
+		atts = append(atts, cognition.Attachment(a))
+	}
 	st, err := d.client.RunAgent(ctx, cognition.RunRequest{
-		RunID: cmd.RunID, SessionID: cmd.SessionID, Query: cmd.Query, AgentType: agentType, MaxSteps: d.maxSteps,
+		RunID: cmd.RunID, SessionID: cmd.SessionID, Query: cmd.Query, AgentType: agentType,
+		MaxSteps: d.maxSteps, OwnerID: cmd.OwnerID, Attachments: atts,
 	})
 	if err != nil {
 		_ = d.runs.FinishRun(finCtx, store.FinishRunParams{RunID: cmd.RunID, Status: store.StatusFailed, ErrorMsg: err.Error()})

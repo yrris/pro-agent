@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -24,21 +25,31 @@ import (
 )
 
 type handlers struct {
-	dispatcher   *dispatch.Dispatcher
-	runs         store.RunRepository
-	sessions     store.SessionRepository
-	events       store.EventRepository
-	artifacts    artifact.Store
-	healthChecks map[string]health.Check
-	runTimeout   time.Duration
-	log          *slog.Logger
+	dispatcher     *dispatch.Dispatcher
+	runs           store.RunRepository
+	sessions       store.SessionRepository
+	events         store.EventRepository
+	artifacts      artifact.Store
+	healthChecks   map[string]health.Check
+	runTimeout     time.Duration
+	maxUploadBytes int64
+	log            *slog.Logger
 }
 
 // NewRouter 装配路由与中间件。artifacts 可为 nil（仅 /artifacts 不可用）；
 // sessions 可为 nil（仅 /sessions 不可用）；healthChecks 可为 nil（/healthz 退化为「进程存活即 200」）；
 // webDir 非空时经 NotFound 托管前端静态资源 + SPA 回退（已注册 API 路由优先匹配，零冲突）。
 func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.SessionRepository, events store.EventRepository, artifacts artifact.Store, healthChecks map[string]health.Check, runTimeout time.Duration, webDir string, log *slog.Logger) http.Handler {
-	h := &handlers{dispatcher: d, runs: runs, sessions: sessions, events: events, artifacts: artifacts, healthChecks: healthChecks, runTimeout: runTimeout, log: log}
+	h := &handlers{
+		dispatcher: d, runs: runs, sessions: sessions, events: events, artifacts: artifacts,
+		healthChecks: healthChecks, runTimeout: runTimeout,
+		maxUploadBytes: DefaultMaxUploadBytes, log: log,
+	}
+	if v := os.Getenv("MAX_UPLOAD_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			h.maxUploadBytes = n
+		}
+	}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
@@ -47,6 +58,7 @@ func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.
 	r.Get("/runs/{runID}/events", h.replay)
 	r.Get("/sessions", h.listSessions)
 	r.Get("/sessions/{sessionID}/runs", h.listSessionRuns)
+	r.Post("/uploads", h.upload)
 	r.Get("/artifacts/*", h.artifact)
 	if webDir != "" {
 		r.NotFound(spaHandler(webDir))
@@ -62,10 +74,18 @@ func (h *handlers) healthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, rep.HTTPStatus, map[string]any{"healthy": rep.Healthy, "checks": rep.Body})
 }
 
+type attachmentRef struct {
+	ResourceKey string `json:"resourceKey"`
+	FileName    string `json:"fileName"`
+	MimeType    string `json:"mimeType"`
+	Size        int64  `json:"size"`
+}
+
 type startRunRequest struct {
-	Query     string `json:"query"`
-	SessionID string `json:"sessionId"`
-	AgentType string `json:"agentType"` // "react"(默认) | "plan_solve"
+	Query       string          `json:"query"`
+	SessionID   string          `json:"sessionId"`
+	AgentType   string          `json:"agentType"` // "react"(默认) | "plan_solve"
+	Attachments []attachmentRef `json:"attachments"`
 }
 
 func (h *handlers) startRun(w http.ResponseWriter, r *http.Request) {
@@ -83,6 +103,18 @@ func (h *handlers) startRun(w http.ResponseWriter, r *http.Request) {
 		agentType = "react"
 	}
 	ownerID := ownerOf(r)
+	// 附件 key 防伪造闸门：只接受当前用户自己的 uploads 对象——否则任何人可把
+	// 他人 upload key 塞进 attachments，让认知面替他读取内容/写进知识库。
+	atts := make([]dispatch.Attachment, 0, len(body.Attachments))
+	for _, a := range body.Attachments {
+		if !ValidateAttachmentKey(ownerID, a.ResourceKey) {
+			writeProblem(w, http.StatusForbidden, "forbidden", "附件不属于当前用户："+a.ResourceKey)
+			return
+		}
+		atts = append(atts, dispatch.Attachment{
+			ResourceKey: a.ResourceKey, FileName: a.FileName, MimeType: a.MimeType, Size: a.Size,
+		})
+	}
 
 	// 准入必须在写任何响应头之前，满载则干净地回 429。
 	release, ok := h.dispatcher.Admit()
@@ -107,6 +139,7 @@ func (h *handlers) startRun(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.dispatcher.Run(runCtx, dispatch.StartCommand{
 		RunID: runID, SessionID: sessionID, OwnerID: ownerID, Query: body.Query, AgentType: agentType,
+		Attachments: atts,
 	}, sink); err != nil {
 		h.log.Error("run failed", "runID", runID, "err", err)
 	}
@@ -151,12 +184,22 @@ func (h *handlers) replay(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// artifact 代理产物下载。resourceKey 形如 {runId}/{toolCallId}/{file}，
-// 用首段 runId 反查 run 校验 owner，再从对象存储流式回传。
+// artifact 代理产物下载。两类 key、两种鉴权：
+//   - uploads/{owner}/…（M8 上传对象）：owner 前置于 key，比对第二段即可，免查库
+//     ——必须在 runID 反查之前特判（其首段 "uploads" 不是 runID）。
+//   - {runId}/{toolCallId}/{file}（运行产物）：用首段 runId 反查 run 校验 owner。
 func (h *handlers) artifact(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "*")
 	if key == "" {
 		writeProblem(w, http.StatusNotFound, "not_found", "缺少产物 key")
+		return
+	}
+	if strings.HasPrefix(key, "uploads/") {
+		if OwnerOfUploadKey(key) != ownerOf(r) {
+			writeProblem(w, http.StatusForbidden, "forbidden", "无权访问该产物")
+			return
+		}
+		h.serveObject(w, r, key)
 		return
 	}
 	runID := key
@@ -176,6 +219,11 @@ func (h *handlers) artifact(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusForbidden, "forbidden", "无权访问该产物")
 		return
 	}
+	h.serveObject(w, r, key)
+}
+
+// serveObject 鉴权通过后的公共回传路径（uploads 与运行产物共用）。
+func (h *handlers) serveObject(w http.ResponseWriter, r *http.Request, key string) {
 	if h.artifacts == nil {
 		writeProblem(w, http.StatusServiceUnavailable, "no_artifact_store", "产物存储未配置")
 		return

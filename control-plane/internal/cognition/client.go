@@ -15,13 +15,23 @@ import (
 	agentv1 "my-agent/control-plane/internal/genproto/agent/v1"
 )
 
+// Attachment 是已上传附件的引用（归属校验在 api 层完成）。
+type Attachment struct {
+	ResourceKey string
+	FileName    string
+	MimeType    string
+	Size        int64
+}
+
 // RunRequest 是发起一次认知 run 的入参。
 type RunRequest struct {
-	RunID     string
-	SessionID string
-	Query     string
-	AgentType string
-	MaxSteps  int32
+	RunID       string
+	SessionID   string
+	Query       string
+	AgentType   string
+	MaxSteps    int32
+	OwnerID     string // 经 proto metadata["owner_id"] 传认知面（owner 级知识库归属）
+	Attachments []Attachment
 }
 
 // Stream 是一次 run 的事件流；Recv 在流结束时返回 io.EOF。
@@ -73,13 +83,25 @@ func (c *grpcClient) RunAgent(ctx context.Context, req RunRequest) (Stream, erro
 	if agentType == "" {
 		agentType = "react"
 	}
+	var metadata map[string]string
+	if req.OwnerID != "" {
+		metadata = map[string]string{"owner_id": req.OwnerID}
+	}
+	atts := make([]*agentv1.Attachment, 0, len(req.Attachments))
+	for _, a := range req.Attachments {
+		atts = append(atts, &agentv1.Attachment{
+			ResourceKey: a.ResourceKey, FileName: a.FileName, MimeType: a.MimeType, Size: a.Size,
+		})
+	}
 	s, err := c.svc.Run(ctx, &agentv1.RunRequest{
 		RunId:         req.RunID,
 		SessionId:     req.SessionID,
 		Query:         req.Query,
 		AgentType:     agentType,
 		MaxSteps:      req.MaxSteps,
+		Metadata:      metadata,
 		SchemaVersion: event.SchemaVersion,
+		Attachments:   atts,
 	}, grpc.WaitForReady(true)) // 容忍认知面短暂未就绪/重连，在 run 超时内等待
 	if err != nil {
 		return nil, fmt.Errorf("cognition: open run stream: %w", err)
