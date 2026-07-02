@@ -19,6 +19,7 @@ import logging
 from langchain_core.messages import HumanMessage
 
 from cognition._genproto import agent_pb2_grpc
+from cognition.attachments import attachment_note, build_attachment_message, normalize_attachments
 from cognition.config import Settings
 from cognition.events.mapper import EventMapper
 from cognition.observability.langfuse_seam import build_langfuse_callbacks
@@ -48,23 +49,38 @@ def resolve_kb_id(request) -> str:
 class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
     """一次 run = 一个 server-streaming RPC。按 agent_type 选图。"""
 
-    def __init__(self, react_graph, settings: Settings, plan_graph=None, tool_providers=None) -> None:
+    def __init__(
+        self,
+        react_graph,
+        settings: Settings,
+        plan_graph=None,
+        tool_providers=None,
+        ingest_attachments_fn=None,
+    ) -> None:
         self.react_graph = react_graph
         self.plan_graph = plan_graph
         self.settings = settings
         # 工具名 → provider（local/mcp/skill），装配期从工具集构建后注入 EventMapper。
         self.tool_providers = dict(tool_providers or {})
+        # 附件入库（同步可调用 (att_dicts, kb_id)->list[入库文件名]；Run 内经 to_thread 调用）。
+        self.ingest_attachments_fn = ingest_attachments_fn
 
-    def _build(self, request):
+    def _build(self, request, ingested_names: tuple[str, ...] = ()):
         """返回 (graph, initial_state, recursion_limit)。"""
         run_id = request.run_id or "unknown"
         session_id = request.session_id or run_id
         max_steps = request.max_steps or self.settings.max_steps
         agent_type = request.agent_type or "react"
+        attachments = normalize_attachments(getattr(request, "attachments", []) or [])
 
         if agent_type == AGENT_TYPE_PLAN_SOLVE and self.plan_graph is not None:
+            # plan 模式不做图片多模态（planner 无 messages 接缝，见 docs/08 §4 已知限制）：
+            # 附件以短注记进 query（planner 拆步骤时可引用），文本类已由入库预步进知识库。
+            query = request.query
+            if attachments:
+                query = f"{request.query}\n{attachment_note(attachments, ingested_names)}"
             state = {
-                "query": request.query,
+                "query": query,
                 "request_id": run_id,
                 "session_id": session_id,
                 "plan": None,
@@ -80,12 +96,18 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
             recursion = 4 * int(self.settings.planner_max_steps) + 25
             return self.plan_graph, state, recursion
 
+        if attachments:
+            # 附件消息：文本块（query+清单注记）+ 图片 pro_attachment 引用块
+            #（checkpoint 只存引用，base64 在 think 投影期按需展开）。
+            human = build_attachment_message(request.query, attachments, ingested_names)
+        else:
+            human = HumanMessage(content=request.query)
         state = {
-            "messages": [HumanMessage(content=request.query)],
+            "messages": [human],
             "request_id": run_id,
             "session_id": session_id,
             "query": request.query,
-            "product_files": [],
+            "product_files": attachments,  # M1 起预留的 seam，本期起实装
             "is_stream": True,
             "step": 0,
         }
@@ -102,14 +124,34 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
         )
 
         mapper = EventMapper(run_id, self.tool_providers)
-        graph, state, recursion = self._build(request)
+        kb_id = resolve_kb_id(request)
+
+        # —— 附件入库预步（run 前同步：read-your-writes，刚上传就能问到）——
+        # 必须 to_thread：embedder/下载是同步阻塞，裸调会冻结 grpc.aio 单事件循环上的
+        # 全部并发 run。整体 best-effort：入库失败不阻断 run（附件仍以注记/引用块在场）。
+        ingested: tuple[str, ...] = ()
+        attachments = list(getattr(request, "attachments", []) or [])
+        if attachments and self.ingest_attachments_fn is not None:
+            from cognition.attachments import normalize_attachments
+
+            try:
+                names = await asyncio.to_thread(
+                    self.ingest_attachments_fn, normalize_attachments(attachments), kb_id
+                )
+                ingested = tuple(names or ())
+                if ingested:
+                    log.info("attachments ingested into %s: %s", kb_id, list(ingested))
+            except Exception as exc:  # noqa: BLE001 — 入库是增强路径，绝不拖垮 run
+                log.warning("attachment ingest failed: %s", exc)
+
+        graph, state, recursion = self._build(request, ingested)
         # kb_id 单点解析进 metadata：knowledge_search（config 优先）与附件入库共用；
         # plan_solve 的 executor 分支经 child_config metadata spread 自动透传。
         metadata = {
             "request_id": run_id,
             "run_id": run_id,
             "session_id": session_id,
-            "kb_id": resolve_kb_id(request),
+            "kb_id": kb_id,
         }
         config = {
             "configurable": {"thread_id": session_id},

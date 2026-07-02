@@ -39,6 +39,7 @@ def build_react_graph(
     *,
     max_steps: int = 40,
     history_policy: Optional["HistoryPolicy"] = None,
+    expander=None,
 ) -> CompiledStateGraph:
     """装配并编译 ReAct 图。
 
@@ -48,9 +49,10 @@ def build_react_graph(
         checkpointer: 可选 Postgres checkpointer（None 则不持久化，便于测试）。
         max_steps: ReAct 循环上限（注入路由纯函数）。
         history_policy: 可选记忆投影预算（None 则不裁剪，行为同 M1）。
+        expander: 可选附件引用块展开投影（attachments.expand_attachment_blocks 闭包）。
     """
     graph = StateGraph(AgentState)
-    graph.add_node("agent", make_think_node(model, history_policy=history_policy))
+    graph.add_node("agent", make_think_node(model, history_policy=history_policy, expander=expander))
     graph.add_node("tools", ToolNode(list(tools), handle_tool_errors=_tool_error_message))
 
     graph.add_edge(START, "agent")

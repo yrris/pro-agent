@@ -67,14 +67,33 @@ async def serve(settings: Settings | None = None) -> None:
         max_messages=settings.history_max_messages, max_chars=settings.history_max_chars
     )
 
+    # —— M8 附件：pro_attachment 引用块的展开投影 + 上传附件入库 ——
+    from functools import partial
+
+    from cognition.attachments import MinioDownloader, expand_attachment_blocks, supports_vision
+    from cognition.providers.router import _resolve_role
+
+    exec_provider, _ = _resolve_role("executor", settings)
+    vision = (not settings.fake_model) and supports_vision(exec_provider)
+    expander = partial(
+        expand_attachment_blocks, downloader=MinioDownloader(settings), vision=vision
+    )
+    ingest_fn = None
+    if settings.rag_enabled:
+        from cognition.attachments import build_ingestor
+
+        ingest_fn = build_ingestor(settings)
+    logger.info("attachments: vision=%s(provider=%s) auto_ingest=%s", vision, exec_provider, bool(ingest_fn))
+
     react_graph = build_react_graph(
         react_model, tools, checkpointer=checkpointer,
-        max_steps=settings.max_steps, history_policy=history_policy,
+        max_steps=settings.max_steps, history_policy=history_policy, expander=expander,
     )
 
     # Plan-Execute：executor 复用一套 ReAct 子图（无 checkpointer，分支级 thread 隔离）。
     executor_subgraph = build_react_graph(
-        executor_model, tools, max_steps=settings.max_steps, history_policy=history_policy
+        executor_model, tools, max_steps=settings.max_steps,
+        history_policy=history_policy, expander=expander,
     )
     plan_graph = build_plan_execute_graph(
         planner_model,
@@ -90,7 +109,10 @@ async def serve(settings: Settings | None = None) -> None:
 
     server = grpc.aio.server()
     agent_pb2_grpc.add_CognitionServiceServicer_to_server(
-        CognitionServicer(react_graph, settings, plan_graph=plan_graph, tool_providers=provider_map),
+        CognitionServicer(
+            react_graph, settings, plan_graph=plan_graph,
+            tool_providers=provider_map, ingest_attachments_fn=ingest_fn,
+        ),
         server,
     )
     # 标准 gRPC 健康检查：图装配完成后翻 SERVING，供 Go /healthz 探"业务就绪"。
