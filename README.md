@@ -1,4 +1,4 @@
-# my-agent
+# pro-agent
 
 一个**多智能体应用平台**：**Go 控制面 + Python(LangGraph) 认知面** 的双平面架构。
 

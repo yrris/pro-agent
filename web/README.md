@@ -1,4 +1,4 @@
-# my-agent web
+# pro-agent web
 
 现代化前端：流式对话、计划视图、工具卡片、artifact 工作区、历史回放、健康徽章。
 React 19 + Vite + TypeScript + Tailwind v4 + 手写组件。

@@ -10,7 +10,7 @@ export function LoginView({ onLogin }: { onLogin: (name: string) => void }) {
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle className="text-2xl font-semibold">
-            <span className="text-cyan-400">my</span>-agent
+            <span className="text-cyan-400">pro</span>-agent
           </CardTitle>
           <CardDescription>多智能体应用平台 · 输入用户名进入</CardDescription>
         </CardHeader>

@@ -52,7 +52,7 @@ export function Header({
   return (
     <header className="flex items-center gap-3 border-b px-4 py-3">
       <span className="text-lg font-semibold tracking-tight">
-        <span className="text-cyan-400">my</span>-agent
+        <span className="text-cyan-400">pro</span>-agent
       </span>
       <span className="hidden text-xs text-slate-500 sm:inline">多智能体平台</span>
       <div className="ml-4 flex items-center gap-2">
