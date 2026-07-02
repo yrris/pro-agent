@@ -22,18 +22,22 @@ executor 复用 M1 `build_react_graph`（原 ExecutorAgent 即任务级 ReAct）
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 from typing import Annotated, Any, Awaitable, Callable, Optional, Sequence, TypedDict
 
 from langchain_core.callbacks.manager import adispatch_custom_event
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Send
+from pydantic import BaseModel, Field
 
 from cognition.graphs.history import repair_dangling_tool_calls
 from cognition.graphs.plan_lifecycle import (
@@ -64,11 +68,85 @@ STATE_IDLE = "idle"
 STATE_ERROR = "error"
 
 PLANNER_SYSTEM = (
-    "你是任务规划器。把用户任务拆解为有序、可执行的步骤，并用 planning 工具产出 "
+    "你是任务规划器。把用户任务拆解为有序、可执行的步骤，并调用 planning 工具产出 "
     "{title, steps}。同一步骤内若包含可并行的子任务，用字面量 <sep> 分隔。\n"
     "{{sop}}\n"
-    "请确保每个步骤自包含、产出明确。"
+    "硬性要求：每个步骤必须**自包含**——执行者看不到本对话的完整历史，禁止使用"
+    "「上面/之前/该文件」等对话指代；若步骤需要引用对话中的内容，把所需关键要点"
+    "直接写进步骤文本。产出必须明确（生成文件的步骤要点名用 write_report 工具）。"
 )
+
+
+# ——————————————————————————————————————————————————————————————
+# planning 工具（规划器的结构化输出通道）与解析
+# ——————————————————————————————————————————————————————————————
+class PlanningArgs(BaseModel):
+    """planning 工具入参。"""
+
+    command: str = Field(description="create=新建计划；update=更新剩余步骤")
+    title: str = Field(description="计划标题")
+    steps: list[str] = Field(
+        description="有序步骤列表；同一步骤内可并行的子任务用字面量 <sep> 分隔"
+    )
+
+
+@tool("planning", args_schema=PlanningArgs)
+def planning_tool(command: str, title: str, steps: list[str]) -> str:
+    """创建或更新任务计划。这是规划器的结构化输出通道：调用即视为计划登记成功。
+
+    注意：本工具只绑定给 planner 模型（grpc_server 装配期），从不进入 executor 工具集；
+    planner 节点解析调用参数驱动确定性 plan-lifecycle，并落一条 ack ToolMessage 保证
+    历史配对合法（真实 provider 要求 tool_calls 必有应答）。
+    """
+    return "计划已登记"
+
+
+_JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def _parse_planning_text(text: str) -> Optional[dict]:
+    """从正文提取计划 JSON（模型未走工具调用时的兜底）。
+
+    真实模型（尤其思考模型）即使绑定了工具也可能把计划 JSON 写进正文；此前没有该
+    兜底 → 解析恒失败 → 永远退化"单步计划=原句"。优先 ```json 围栏，其次首个平衡
+    {} 块；必须含非空 steps 列表才算计划。
+    """
+    if not text:
+        return None
+    candidates = _JSON_FENCE.findall(text)
+    if not candidates:
+        start = text.find("{")
+        if start >= 0:
+            depth = 0
+            for i in range(start, len(text)):
+                if text[i] == "{":
+                    depth += 1
+                elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidates = [text[start : i + 1]]
+                        break
+    for cand in candidates:
+        try:
+            obj = json.loads(cand)
+        except Exception:  # noqa: BLE001 — 非法 JSON 跳过，继续下一个候选
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("steps"), list) and obj["steps"]:
+            obj.setdefault("command", "create")
+            return obj
+    return None
+
+
+def _planning_acks(ai: AIMessage) -> list[ToolMessage]:
+    """给 planning 工具调用补 ack 应答（planner 只解析、从不执行该调用——
+    历史里必须有 ToolMessage 配对，否则真实 provider 第二轮起 400）。"""
+    acks: list[ToolMessage] = []
+    for tc in getattr(ai, "tool_calls", None) or []:
+        name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
+        tcid = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", "")
+        if name == "planning" and tcid:
+            acks.append(ToolMessage(content="计划已登记", tool_call_id=str(tcid)))
+    return acks
 
 
 # ——————————————————————————————————————————————————————————————
@@ -77,6 +155,7 @@ PLANNER_SYSTEM = (
 class SubResult(TypedDict, total=False):
     """单个并行子任务的执行结果（并回主状态的增量单元）。"""
 
+    request_id: str  # 所属 run——同会话多次 run 的隔离键（缺失视为遗留数据）
     round: int
     branch_id: str
     task: str
@@ -88,22 +167,74 @@ class SubResult(TypedDict, total=False):
 def merge_sub_results(
     left: Optional[list[SubResult]], right: Optional[list[SubResult]]
 ) -> list[SubResult]:
-    """sub_results 的并发安全 reducer：按 (round, branch_id) 去重、规范排序。
+    """sub_results 的并发安全 reducer：按 (request_id, round, branch_id) 去重、规范排序。
 
-    可交换/可结合：同一 (round, branch_id) 只写一次（重复投递取首个），排序键确定，
-    因此并行分支任意到达序合并结果一致。
+    可交换/可结合：同键只写一次（重复投递取首个），排序键确定，因此并行分支任意
+    到达序合并结果一致。键含 request_id 是**同会话续聊**的关键：checkpointer 会把
+    sub_results 跨 run 累积，若只按 (round, branch) 去重，新 run 的 (0, b0) 会被旧
+    run 的同键结果顶掉（"取首个"），planner/summary 读到的全是上一次的旧内容。
     """
-    merged: dict[tuple[Any, Any], SubResult] = {}
+    merged: dict[tuple[Any, Any, Any], SubResult] = {}
     for item in list(left or []) + list(right or []):
         if not item:
             continue
-        key = (item.get("round"), item.get("branch_id"))
+        key = (str(item.get("request_id") or ""), item.get("round"), item.get("branch_id"))
         if key not in merged:
             merged[key] = item
     return [
         merged[k]
-        for k in sorted(merged.keys(), key=lambda k: (k[0] if k[0] is not None else 0, str(k[1])))
+        for k in sorted(
+            merged.keys(), key=lambda k: (k[0], k[1] if k[1] is not None else 0, str(k[2]))
+        )
     ]
+
+
+def results_for_round(
+    sub_results: Optional[Sequence[SubResult]], request_id: str, rnd: int
+) -> list[SubResult]:
+    """取**本 run** 指定轮次的子任务结果（纯函数）。
+
+    旧 run 的累积结果（含无 request_id 的遗留数据）一律排除——planner 审视的
+    "上一轮执行结果"只能来自当前 run。
+    """
+    rid = str(request_id or "")
+    return [
+        r
+        for r in (sub_results or [])
+        if r and r.get("round") == rnd and str(r.get("request_id") or "") == rid
+    ]
+
+
+def build_context_digest(planner_messages: Optional[Sequence[Any]], max_chars: int = 3000) -> str:
+    """从 planner 历史提取会话背景摘要（近期优先、预算截断，纯函数）。
+
+    executor 分支按设计与会话历史隔离（子任务自包含）；但续聊场景里"把上面内容
+    整理成报告"这类任务必须能看到指代对象。摘要随 Send 注入 executor 提示词——
+    只取 Human/AI 的可见文本（跳过工具消息与空消息），从最新往旧填满预算后按
+    时间顺序输出。
+    """
+    picked: list[str] = []
+    used = 0
+    for m in reversed(list(planner_messages or [])):
+        if isinstance(m, HumanMessage):
+            role = "用户"
+        elif isinstance(m, AIMessage):
+            role = "助手"
+        else:
+            continue
+        content = getattr(m, "content", "")
+        text = (content if isinstance(content, str) else str(content)).strip()
+        if not text:
+            continue
+        entry = f"[{role}] {text}"
+        if used + len(entry) > max_chars:
+            remain = max_chars - used
+            if remain > 20:
+                picked.append(entry[:remain] + "…")
+            break
+        picked.append(entry)
+        used += len(entry)
+    return "\n".join(reversed(picked))
 
 
 def reduce_substate(results: Sequence[SubResult]) -> str:
@@ -262,20 +393,20 @@ def build_plan_execute_graph(
                 content=f"用户任务：{query}\n请用 planning 工具创建计划（同一步骤内可用 <sep> 分隔可并行子任务）。"
             )
             ai = await planner_model.ainvoke([system, *history, human])  # → plan_thought
-            new_msgs += [human, ai]
-            draft = _parse_planning_call(ai)
+            new_msgs += [human, ai, *_planning_acks(ai)]
+            draft = _parse_planning_call(ai) or _parse_planning_text(_ai_text(ai))
             title = (draft or {}).get("title") or "计划"
             steps = (draft or {}).get("steps") or [query or "完成任务"]
-            plan = create(title, list(steps))
+            plan = create(title, [str(s) for s in steps])
             dispatch_round = rnd  # 首轮 dispatch round = 当前 round（默认 0）
         else:
-            this_round = [r for r in sub_results if r.get("round") == rnd]
+            this_round = results_for_round(sub_results, state.get("request_id", ""), rnd)
             reduced = reduce_substate(this_round)
             note = _join_results(this_round)
             human = HumanMessage(content=f"上一轮执行结果：\n{note}\n请审视并推进计划。")
             ai = await planner_model.ainvoke([system, *history, human])  # → plan_thought
-            new_msgs += [human, ai]
-            draft = _parse_planning_call(ai)
+            new_msgs += [human, ai, *_planning_acks(ai)]
+            draft = _parse_planning_call(ai) or _parse_planning_text(_ai_text(ai))
 
             idx = current_step_index(plan)
             if idx is not None:
@@ -318,6 +449,7 @@ def build_plan_execute_graph(
         request_id = state.get("request_id", "")
         session_id = state.get("session_id", "")
         plan_title = state.get("plan_title", "")
+        context_digest = state.get("context_digest", "")
 
         parent_meta = (config or {}).get("metadata") or {}
         child_config: RunnableConfig = {
@@ -325,10 +457,12 @@ def build_plan_execute_graph(
             "tags": list((config or {}).get("tags") or []),
             # branch_id / request_id 注入子图事件 metadata：供 mapper 命名空间化 tool_call_id 与 run 归属。
             "metadata": {**parent_meta, "branch_id": branch_id, "request_id": request_id},
-            "configurable": {"thread_id": f"{session_id}:{branch_id}:r{rnd}"},
+            # 子线程按 run 隔离（request_id 基）：同会话第二次 run 的 (b0, r0) 不能撞上
+            # 上一次 run 的同名线程（executor 子图目前无 checkpointer，此处是防御性正确）。
+            "configurable": {"thread_id": f"{request_id or session_id}:{branch_id}:r{rnd}"},
             "recursion_limit": react_recursion_limit,
         }
-        prompt = _executor_prompt(task, plan_title, sop)
+        prompt = _executor_prompt(task, plan_title, sop, context_digest)
         sub_state = {
             "messages": [HumanMessage(content=prompt)],
             "request_id": request_id,
@@ -347,12 +481,14 @@ def build_plan_execute_graph(
             final_text, observations = _extract_outcome(result_state)
             status = STATE_FINISHED
         except asyncio.TimeoutError:
+            logger.warning("executor branch %s timed out after %.0fs", branch_id, branch_timeout)
             final_text, observations, status = (f"子任务超时（>{branch_timeout}s）", [], STATE_ERROR)
         except Exception as exc:  # noqa: BLE001 — 单分支失败不拖垮其他分支
             logger.warning("executor branch %s failed: %s", branch_id, exc)
             final_text, observations, status = (f"子任务异常：{exc}", [], STATE_ERROR)
 
         sub: SubResult = {
+            "request_id": request_id,
             "round": rnd,
             "branch_id": branch_id,
             "task": task,
@@ -402,6 +538,9 @@ def _route_after_planner(state: PlanExecuteState, max_steps: int):
         return "summary"
 
     subs = current_step(plan).split(SEP)
+    # 会话背景摘要：executor 分支与会话历史隔离，续聊里"整理上面内容"类任务
+    # 靠它拿到指代对象（同一轮各分支共享同一份摘要）。
+    digest = build_context_digest(state.get("planner_messages"))
     return [
         Send(
             "executor",
@@ -414,6 +553,7 @@ def _route_after_planner(state: PlanExecuteState, max_steps: int):
                 "request_id": state.get("request_id", ""),
                 "session_id": state.get("session_id", ""),
                 "plan_title": plan.title if plan else "",
+                "context_digest": digest,
             },
         )
         for i, sub in enumerate(subs)
@@ -429,12 +569,16 @@ def route_after_planner(state: PlanExecuteState, max_steps: int = 5):
 # ——————————————————————————————————————————————————————————————
 # 子任务提示词 / 结果抽取 / 汇总
 # ——————————————————————————————————————————————————————————————
-def _executor_prompt(task: str, plan_title: str, sop: str) -> str:
+def _executor_prompt(task: str, plan_title: str, sop: str, context_digest: str = "") -> str:
     parts = [f"你的任务是：{task}"]
     if plan_title:
         parts.append(f"（所属计划：{plan_title}）")
     if sop:
         parts.append(f"\n参考 SOP：\n{sop}")
+    if context_digest:
+        parts.append(
+            f"\n\n—— 会话背景（供参考；任务中提到「上面/之前的内容」即指这里）——\n{context_digest}"
+        )
     return "".join(parts)
 
 
@@ -462,7 +606,15 @@ def _summarize(state: PlanExecuteState, max_steps: int) -> str:
     reduced = state.get("reduced_state")
 
     if reduced == STATE_ERROR:
-        return "任务执行异常，请联系管理员，任务终止。"
+        # 带上本 run 出错分支的具体原因（超时/异常文本），不能只给一句"联系管理员"。
+        rid = str(state.get("request_id") or "")
+        errs = [
+            f"- {r.get('task','')}：{r.get('result','')}"
+            for r in (state.get("sub_results") or [])
+            if str(r.get("request_id") or "") == rid and r.get("status") == STATE_ERROR
+        ]
+        detail = ("\n" + "\n".join(errs)) if errs else ""
+        return f"任务执行异常，已终止。失败原因：{detail or '（未知）'}"
     if rnd > max_steps and not all_completed(plan):
         return "达到最大迭代次数，任务终止。"
 
@@ -477,6 +629,10 @@ def _summarize(state: PlanExecuteState, max_steps: int) -> str:
             else:
                 lines.append(f"- {step}")
     if not lines:
-        results = state.get("sub_results") or []
+        # 兜底也只看本 run 的结果（旧 run 的累积不泄入）。
+        rid = str(state.get("request_id") or "")
+        results = [
+            r for r in (state.get("sub_results") or []) if str(r.get("request_id") or "") == rid
+        ]
         lines = [f"- {r.get('task','')}: {r.get('result','')}" for r in results]
     return "任务已完成。\n" + "\n".join(lines)

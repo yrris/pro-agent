@@ -53,6 +53,9 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
                 "plan": None,
                 "round": 0,
                 "step": 0,
+                # 显式清残留：同会话上一次 run 若以 ERROR 收场，reduced_state 会随
+                # checkpoint 延续，新 run 会被 route_after_planner 直接送去 summary。
+                "reduced_state": "",
                 "planner_messages": [],
                 "sub_results": [],
             }

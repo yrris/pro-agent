@@ -67,8 +67,9 @@ class Settings(BaseSettings):
     planner_max_steps: int = Field(default=5, ge=1)
     # 并行子任务宽度上限（镜像 maxParallelTasks，默认 2）。
     max_parallel_tasks: int = Field(default=2, ge=1)
-    # 单个并行分支（executor 子图）的超时秒数。
-    branch_timeout_seconds: float = Field(default=120.0, gt=0)
+    # 单个并行分支（executor 子图）的超时秒数。默认 300：思考模型（reasoning）输出
+    # 长报告时 120s 不够，实测被掐在 write_report 调用前（分支 ERROR→任务终止）。
+    branch_timeout_seconds: float = Field(default=300.0, gt=0)
 
     # —— 产物对象存储（MinIO）——
     # 默认与 deploy/.env 的 minio 对齐；上传是惰性/可降级的（无 MinIO 也能跑单测）。

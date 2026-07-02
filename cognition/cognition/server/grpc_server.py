@@ -48,8 +48,12 @@ async def serve(settings: Settings | None = None) -> None:
         planner_model = build_fake_plan_model()
         executor_model = build_fake_executor_model().bind_tools(tools)
     else:
+        from cognition.graphs.plan_execute import planning_tool
+
         react_model = select_model("executor", tools=tools, settings=settings)
-        planner_model = select_model("planner", settings=settings)
+        # planner 必须绑定 planning 工具——否则真实模型只能把计划 JSON 写进正文，
+        # 解析失败即永远退化"单步计划=原句"（fake planner 直接产 tool_calls 掩盖过此缺陷）。
+        planner_model = select_model("planner", tools=[planning_tool], settings=settings)
         executor_model = select_model("executor", tools=tools, settings=settings)
 
     aclose = None
