@@ -1,4 +1,4 @@
-.PHONY: help proto proto-tools proto-go proto-py infra-up infra-down cognition control web check
+.PHONY: help proto proto-tools proto-go proto-py infra-up infra-down cognition control web check web-build stack-up stack-down
 
 # 读取 deploy/.env 并导出给应用进程（deploy/.env 不提交；含密钥与模型/连接配置）。
 LOAD_ENV = set -a; [ -f deploy/.env ] && . ./deploy/.env; set +a;
@@ -44,3 +44,12 @@ infra-up: ## 起本地依赖（postgres/qdrant/redis/minio/nats）
 
 infra-down: ## 停本地依赖
 	cd deploy && docker compose down
+
+web-build: ## 前端生产构建（web/dist，供 WEB_DIR 托管）
+	cd web && npm run build
+
+stack-up: ## 一键起完整平台（基础设施+控制面+认知面，前端单端口 :8080）
+	cd deploy && docker compose --profile app up -d --build
+
+stack-down: ## 停完整平台
+	cd deploy && docker compose --profile app down
