@@ -12,7 +12,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 function HealthBadge({ report }: { report: HealthReport | null }) {
-  const color = !report ? "bg-slate-500" : report.healthy ? "bg-emerald-500" : "bg-rose-500";
+  const color = !report ? "bg-stone-500" : report.healthy ? "bg-emerald-500" : "bg-rose-500";
   const label = !report ? "检测中" : report.healthy ? "健康" : "异常";
   const detail = report
     ? Object.entries(report.checks)
@@ -20,7 +20,7 @@ function HealthBadge({ report }: { report: HealthReport | null }) {
         .join("\n")
     : "";
   const badge = (
-    <Badge variant="outline" className="gap-1.5 rounded-full text-xs font-normal text-slate-300">
+    <Badge variant="outline" className="gap-1.5 rounded-full text-xs font-normal text-stone-300">
       <span className={`h-2 w-2 rounded-full ${color}`} />
       {label}
     </Badge>
@@ -52,11 +52,11 @@ export function Header({
   return (
     <header className="flex items-center gap-3 border-b px-4 py-3">
       <span className="text-lg font-semibold tracking-tight">
-        <span className="text-cyan-400">pro</span>-agent
+        <span className="text-primary">pro</span>-agent
       </span>
-      <span className="hidden text-xs text-slate-500 sm:inline">多智能体平台</span>
+      <span className="hidden text-xs text-stone-500 sm:inline">多智能体平台</span>
       <div className="ml-4 flex items-center gap-2">
-        <span className="text-xs text-slate-500">模式</span>
+        <span className="text-xs text-stone-500">模式</span>
         <Select value={agentType} onValueChange={onAgentType}>
           {/* M9 座位：三档模式（快速/深度思考/深度研究）与输出格式选择器落位于此 */}
           <SelectTrigger size="sm" className="min-w-28">
@@ -73,8 +73,8 @@ export function Header({
       </div>
       <div className="ml-auto flex items-center gap-3">
         <HealthBadge report={health} />
-        <span className="text-sm text-slate-400">👤 {userId}</span>
-        <Button variant="ghost" size="sm" onClick={onLogout} className="text-xs text-slate-400">
+        <span className="text-sm text-stone-400">👤 {userId}</span>
+        <Button variant="ghost" size="sm" onClick={onLogout} className="text-xs text-stone-400">
           退出
         </Button>
       </div>

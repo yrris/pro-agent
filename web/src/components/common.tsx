@@ -10,7 +10,7 @@ import {
 
 export function Markdown({ children }: { children: string }) {
   return (
-    <div className="prose-sm leading-relaxed break-words [&_pre]:overflow-auto [&_pre]:rounded-lg [&_pre]:bg-black/40 [&_pre]:p-3 [&_code]:text-cyan-300 [&_a]:text-cyan-400 [&_a]:underline [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold">
+    <div className="prose-sm leading-relaxed break-words [&_pre]:overflow-auto [&_pre]:rounded-lg [&_pre]:bg-black/40 [&_pre]:p-3 [&_code]:text-amber-200/90 [&_a]:text-primary [&_a]:underline [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>
     </div>
   );
@@ -32,7 +32,7 @@ export function Collapsible({
   return (
     <UICollapsible defaultOpen={defaultOpen} className="rounded-xl border bg-card">
       <CollapsibleTrigger className="group flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-white/[0.04]">
-        <span className="text-xs text-slate-400 transition-transform group-data-[state=open]:rotate-90">
+        <span className="text-xs text-stone-400 transition-transform group-data-[state=open]:rotate-90">
           ▶
         </span>
         <span className="min-w-0 flex-1 truncate">{title}</span>
@@ -50,7 +50,7 @@ const STATUS_STYLE: Record<string, string> = {
 };
 
 export function ToolStatusBadge({ status }: { status: string }) {
-  const cls = STATUS_STYLE[status] ?? "bg-slate-500/15 text-slate-300 border-slate-500/30";
+  const cls = STATUS_STYLE[status] ?? "bg-stone-500/15 text-stone-300 border-stone-500/30";
   return (
     <Badge className={`gap-1 rounded-full font-normal ${cls}`}>
       {status === "running" && <span className="pulse-dot">●</span>}
@@ -65,7 +65,7 @@ export function ProviderTag({ provider }: { provider: string }) {
       ? "bg-violet-500/15 text-violet-300"
       : provider === "skill"
         ? "bg-amber-500/15 text-amber-300"
-        : "bg-slate-500/15 text-slate-300";
+        : "bg-stone-500/15 text-stone-300";
   return (
     <Badge variant="secondary" className={`rounded px-1.5 py-0.5 text-[10px] uppercase ${cls}`}>
       {provider}

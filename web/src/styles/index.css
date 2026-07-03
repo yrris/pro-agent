@@ -7,26 +7,28 @@
    radius=0.75rem 对齐原主导圆角 rounded-xl。语义色（emerald/rose/blue/indigo/
    violet/amber）不 token 化，留在组件里做字面 utilities。 */
 :root {
-  color-scheme: dark; /* 唯一主题为暗色：原生控件/滚动条不再跟随系统走浅色 */
-  --background: #0b1020;
-  --foreground: #e6e9f0;
-  --card: rgba(255, 255, 255, 0.03);
-  --card-foreground: #e6e9f0;
-  --popover: #0f172a;
-  --popover-foreground: #cbd5e1;
-  --primary: #0891b2;
+  color-scheme: dark;
+  /* UX-1：Claude 官网风暖炭黑体系（参考 tmp/todo/界面设计参考图）。
+     暖灰层次：页面 #1f1e1b < 卡面 #262521 < 浮层 #2e2c27；珊瑚橙 #d97757 为唯一品牌色。 */
+  --background: #1f1e1b;
+  --foreground: #e8e6e0;
+  --card: #262521;
+  --card-foreground: #e8e6e0;
+  --popover: #2e2c27;
+  --popover-foreground: #d6d3cb;
+  --primary: #d97757;              /* Claude 珊瑚橙 */
   --primary-foreground: #ffffff;
-  --secondary: rgba(255, 255, 255, 0.05);
-  --secondary-foreground: #cbd5e1;
-  --muted: rgba(255, 255, 255, 0.04);
-  --muted-foreground: #94a3b8;
+  --secondary: rgba(255, 255, 255, 0.06);
+  --secondary-foreground: #d6d3cb;
+  --muted: rgba(255, 255, 255, 0.05);
+  --muted-foreground: #a8a49b;
   --accent: rgba(255, 255, 255, 0.08);
-  --accent-foreground: #e6e9f0;
-  --destructive: #f43f5e;
+  --accent-foreground: #e8e6e0;
+  --destructive: #e5484d;
   --destructive-foreground: #ffffff;
-  --border: rgba(255, 255, 255, 0.1);
+  --border: rgba(255, 255, 255, 0.09);
   --input: rgba(255, 255, 255, 0.1);
-  --ring: #06b6d4;
+  --ring: #d97757;
   --radius: 0.75rem;
 }
 
@@ -72,7 +74,7 @@ body {
 /* 细腻滚动条 */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #2a3350 transparent;
+  scrollbar-color: #3d3a34 transparent;
 }
 *::-webkit-scrollbar {
   width: 8px;

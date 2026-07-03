@@ -10,7 +10,7 @@ import { Progress } from "@/components/ui/progress";
 function UserBubble({ text }: { text: string }) {
   return (
     <div className="flex justify-end">
-      <div className="max-w-[80%] rounded-2xl rounded-br-sm bg-cyan-600/25 px-4 py-2 text-sm text-cyan-50">
+      <div className="max-w-[80%] rounded-2xl rounded-br-sm bg-white/[0.07] px-4 py-2 text-sm text-stone-100">
         {text}
       </div>
     </div>
@@ -21,8 +21,8 @@ function ThoughtBlock({ kind, text }: { kind: "tool" | "plan"; text: string }) {
   if (!text.trim()) return null;
   const label = kind === "plan" ? "规划思考" : "思考";
   return (
-    <Collapsible title={<span className="text-slate-400">💭 {label}</span>} defaultOpen>
-      <div className="whitespace-pre-wrap text-slate-300">{text}</div>
+    <Collapsible title={<span className="text-stone-400">💭 {label}</span>} defaultOpen>
+      <div className="whitespace-pre-wrap text-stone-300">{text}</div>
     </Collapsible>
   );
 }
@@ -35,7 +35,7 @@ function PlanCard({ plan }: { plan: PlanViewT }) {
       <CardContent className="px-3">
         <div className="mb-2 flex items-center gap-2">
           <span className="text-indigo-300">📋 {plan.title || "计划"}</span>
-          <span className="text-xs text-slate-400">
+          <span className="text-xs text-stone-400">
             {done}/{plan.steps.length}
           </span>
           <Progress value={pct} className="ml-auto h-1.5 w-24 bg-white/10 [&>[data-slot=progress-indicator]]:bg-indigo-400" />
@@ -45,7 +45,7 @@ function PlanCard({ plan }: { plan: PlanViewT }) {
             const st = plan.stepStatus[i] ?? "not_started";
             const icon = st === "completed" ? "✅" : st === "in_progress" ? "⏳" : "⬜";
             return (
-              <li key={i} className={`flex gap-2 text-sm ${st === "in_progress" ? "text-indigo-200" : "text-slate-300"}`}>
+              <li key={i} className={`flex gap-2 text-sm ${st === "in_progress" ? "text-indigo-200" : "text-stone-300"}`}>
                 <span>{icon}</span>
                 <span className="min-w-0 flex-1">{step}</span>
               </li>
@@ -64,7 +64,7 @@ function TaskChip({ text }: { text: string }) {
       className="gap-2 rounded-lg border-amber-500/25 bg-amber-500/[0.06] px-3 py-1.5 text-sm font-normal text-amber-100"
     >
       <span>🧩 子任务</span>
-      <span className="text-slate-300">{text}</span>
+      <span className="text-stone-300">{text}</span>
     </Badge>
   );
 }
@@ -72,17 +72,17 @@ function TaskChip({ text }: { text: string }) {
 function ToolCard({ call, resultText }: { call: ToolCallView; resultText?: string }) {
   const title = (
     <span className="flex items-center gap-2">
-      <span className="text-slate-200">🔧 {call.toolName || "tool"}</span>
+      <span className="text-stone-200">🔧 {call.toolName || "tool"}</span>
       <ProviderTag provider={call.toolProvider} />
     </span>
   );
   return (
     <Collapsible title={title} right={<ToolStatusBadge status={call.status} />} defaultOpen={call.status !== "success"}>
-      {call.summary && <div className="mb-2 text-slate-400">{call.summary}</div>}
+      {call.summary && <div className="mb-2 text-stone-400">{call.summary}</div>}
       {call.input != null && (
         <div className="mb-2">
-          <div className="mb-1 text-xs text-slate-500">入参</div>
-          <pre className="overflow-auto rounded-lg bg-black/40 p-2 text-xs text-cyan-200">
+          <div className="mb-1 text-xs text-stone-500">入参</div>
+          <pre className="overflow-auto rounded-lg bg-black/40 p-2 text-xs text-stone-200">
             {JSON.stringify(call.input, null, 2)}
           </pre>
         </div>
@@ -90,8 +90,8 @@ function ToolCard({ call, resultText }: { call: ToolCallView; resultText?: strin
       {call.errorMsg && <div className="mb-2 text-rose-300">错误：{call.errorMsg}</div>}
       {resultText != null && (
         <div>
-          <div className="mb-1 text-xs text-slate-500">观察结果</div>
-          <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-black/30 p-2 text-xs text-slate-200">
+          <div className="mb-1 text-xs text-stone-500">观察结果</div>
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-black/30 p-2 text-xs text-stone-200">
             {resultText}
           </pre>
         </div>
@@ -120,7 +120,7 @@ function AttachmentRow({ attachments }: { attachments?: AttachmentRef[] }) {
   return (
     <div className="flex flex-wrap justify-end gap-1.5">
       {attachments.map((a) => (
-        <Badge key={a.resourceKey} variant="outline" className="gap-1 font-normal text-slate-400">
+        <Badge key={a.resourceKey} variant="outline" className="gap-1 font-normal text-stone-400">
           <Paperclip className="size-3" />
           <span className="max-w-40 truncate">{a.fileName}</span>
         </Badge>
@@ -171,7 +171,7 @@ export const MessageList = memo(function MessageList({
         }
       })}
       {state.unknown.length > 0 && (
-        <div className="text-xs text-slate-500">（{state.unknown.length} 条暂不支持的事件，已忽略）</div>
+        <div className="text-xs text-stone-500">（{state.unknown.length} 条暂不支持的事件，已忽略）</div>
       )}
     </div>
   );

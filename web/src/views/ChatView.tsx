@@ -44,7 +44,7 @@ function AttachmentChips({
         <Badge
           key={a.id}
           variant="outline"
-          className={`gap-1 font-normal ${a.status === "error" ? "border-rose-500/40 text-rose-300" : "text-slate-300"}`}
+          className={`gap-1 font-normal ${a.status === "error" ? "border-rose-500/40 text-rose-300" : "text-stone-300"}`}
         >
           {a.status === "uploading" && <Loader2 className="animate-spin" />}
           <span className="max-w-40 truncate">{a.file.name}</span>
@@ -53,7 +53,7 @@ function AttachmentChips({
               <RotateCw className="size-3" />
             </button>
           )}
-          <button onClick={() => onRemove(a.id)} title="移除" className="hover:text-slate-100">
+          <button onClick={() => onRemove(a.id)} title="移除" className="hover:text-stone-100">
             <X className="size-3" />
           </button>
         </Badge>
@@ -143,7 +143,7 @@ function Composer({
             size="sm"
             disabled={agentType === "react"}
             title={agentType === "react" ? "快速模式不指定输出格式" : "输出格式"}
-            className="w-24 shrink-0 border-slate-700 bg-slate-900 text-slate-300"
+            className="w-24 shrink-0 border-stone-700 bg-stone-900 text-stone-300"
           >
             <SelectValue />
           </SelectTrigger>
@@ -228,14 +228,14 @@ export function ChatView({
           {empty ? (
             <div className="mx-auto mt-16 max-w-md text-center">
               <div className="mb-2 text-2xl">🤖</div>
-              <div className="mb-4 text-slate-400">向平台提问，试试：</div>
+              <div className="mb-4 text-stone-400">向平台提问，试试：</div>
               <div className="space-y-2">
                 {SAMPLE_QUESTIONS.map((q) => (
                   <Button
                     key={q}
                     variant="outline"
                     onClick={() => onSubmit(q)}
-                    className="block h-auto w-full px-3 py-2 text-left text-sm font-normal text-slate-300"
+                    className="block h-auto w-full px-3 py-2 text-left text-sm font-normal text-stone-300"
                   >
                     {q}
                   </Button>
@@ -257,12 +257,12 @@ export function ChatView({
               {live && <MessageList state={live.state} query={live.query} attachments={live.attachments} />}
               {loadingHistory && (
                 <div className="mt-3 space-y-2">
-                  <div className="text-sm text-slate-500 pulse-dot">● 载入历史会话…</div>
+                  <div className="text-sm text-stone-500 pulse-dot">● 载入历史会话…</div>
                   <Skeleton className="h-16 w-3/4" />
                   <Skeleton className="h-10 w-1/2" />
                 </div>
               )}
-              {status === "running" && <div className="mt-3 text-sm text-slate-500 pulse-dot">● 运行中…</div>}
+              {status === "running" && <div className="mt-3 text-sm text-stone-500 pulse-dot">● 运行中…</div>}
               {status === "error" && (
                 <div className="mt-3 text-sm text-rose-400">运行出错，请查看健康状态或重试。</div>
               )}
