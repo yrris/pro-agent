@@ -116,9 +116,13 @@ func (d *Dispatcher) Run(ctx context.Context, cmd StartCommand, sink stream.Sink
 	}
 
 	res := d.hub.Pump(ctx, cmd.RunID, st, sink)
-	if ferr := d.runs.FinishRun(finCtx, store.FinishRunParams{
+	fp := store.FinishRunParams{
 		RunID: cmd.RunID, Status: res.Status, FinalSummaryText: res.Summary, ErrorMsg: res.ErrorMsg,
-	}); ferr != nil && log != nil {
+	}
+	if res.Usage != nil {
+		fp.InputTokens, fp.OutputTokens, fp.ModelCalls = res.Usage.InputTokens, res.Usage.OutputTokens, res.Usage.ModelCalls
+	}
+	if ferr := d.runs.FinishRun(finCtx, fp); ferr != nil && log != nil {
 		log.Error("finish run failed", "err", ferr)
 	}
 	if log != nil {

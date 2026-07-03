@@ -51,6 +51,10 @@ type FinishRunParams struct {
 	Status           string
 	FinalSummaryText string
 	ErrorMsg         string
+	// M11：终态 RESULT 附带的全 run token 用量（零值=未知/无模型调用）。
+	InputTokens  int64
+	OutputTokens int64
+	ModelCalls   int32
 }
 
 // RunRepository 是 run 生命周期的写读端口。
@@ -86,9 +90,12 @@ func (r *pgRunRepo) FinishRun(ctx context.Context, p FinishRunParams) error {
 		   SET status = $2,
 		       final_summary_text = NULLIF($3, ''),
 		       error_msg = NULLIF($4, ''),
+		       input_tokens = $5,
+		       output_tokens = $6,
+		       model_calls = $7,
 		       finished_at = now()
 		 WHERE run_id = $1`,
-		p.RunID, p.Status, p.FinalSummaryText, p.ErrorMsg)
+		p.RunID, p.Status, p.FinalSummaryText, p.ErrorMsg, p.InputTokens, p.OutputTokens, p.ModelCalls)
 	if err != nil {
 		return fmt.Errorf("store: finish run: %w", err)
 	}

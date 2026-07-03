@@ -20,6 +20,7 @@ type Result struct {
 	Summary   string
 	ErrorCode string
 	ErrorMsg  string
+	Usage     *event.UsagePayload // M11：终态 RESULT 附带的全 run 用量（可 nil）
 }
 
 // Hub 把一条认知事件流泵到存储与客户端。
@@ -94,7 +95,11 @@ func (h *Hub) Pump(ctx context.Context, runID string, s cognition.Stream, sink S
 				return Result{Status: store.StatusStopped, ErrorCode: "SINK_WRITE_ERROR", ErrorMsg: err.Error()}
 			}
 			if e.Finish {
-				return Result{Status: store.StatusSuccess, Summary: resultText(e)}
+				res := Result{Status: store.StatusSuccess, Summary: resultText(e)}
+				if e.Result != nil {
+					res.Usage = e.Result.Usage
+				}
+				return res
 			}
 		}
 	}

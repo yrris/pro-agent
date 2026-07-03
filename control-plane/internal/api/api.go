@@ -35,6 +35,7 @@ type handlers struct {
 	healthChecks   map[string]health.Check
 	kb             kb.Store
 	cog            cognition.Client
+	stats          store.StatsRepository
 	runTimeout     time.Duration
 	maxUploadBytes int64
 	log            *slog.Logger
@@ -43,10 +44,10 @@ type handlers struct {
 // NewRouter 装配路由与中间件。artifacts 可为 nil（仅 /artifacts 不可用）；
 // sessions 可为 nil（仅 /sessions 不可用）；healthChecks 可为 nil（/healthz 退化为「进程存活即 200」）；
 // webDir 非空时经 NotFound 托管前端静态资源 + SPA 回退（已注册 API 路由优先匹配，零冲突）。
-func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.SessionRepository, events store.EventRepository, artifacts artifact.Store, healthChecks map[string]health.Check, kbStore kb.Store, cog cognition.Client, runTimeout time.Duration, webDir string, log *slog.Logger) http.Handler {
+func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.SessionRepository, events store.EventRepository, artifacts artifact.Store, healthChecks map[string]health.Check, kbStore kb.Store, cog cognition.Client, stats store.StatsRepository, runTimeout time.Duration, webDir string, log *slog.Logger) http.Handler {
 	h := &handlers{
 		dispatcher: d, runs: runs, sessions: sessions, events: events, artifacts: artifacts,
-		healthChecks: healthChecks, kb: kbStore, cog: cog, runTimeout: runTimeout,
+		healthChecks: healthChecks, kb: kbStore, cog: cog, stats: stats, runTimeout: runTimeout,
 		maxUploadBytes: DefaultMaxUploadBytes, log: log,
 	}
 	if v := os.Getenv("MAX_UPLOAD_BYTES"); v != "" {
@@ -68,6 +69,7 @@ func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.
 	r.Get("/kb/docs", h.listKbDocs)
 	r.Post("/kb/docs", h.ingestKbDoc)
 	r.Delete("/kb/docs", h.deleteKbDoc)
+	r.Get("/stats/usage", h.usageStats) // M11 成本面板（owner 域聚合，纯读）
 	r.Get("/artifacts/*", h.artifact)
 	if webDir != "" {
 		r.NotFound(spaHandler(webDir))
@@ -415,4 +417,25 @@ func writeProblem(w http.ResponseWriter, status int, code, msg string) {
 		w.Header().Set("Retry-After", "1")
 	}
 	writeJSON(w, status, map[string]string{"code": code, "message": msg})
+}
+
+// usageStats：GET /stats/usage?days=30 —— runs 表 owner 域聚合（合计/按天/按模式）。
+func (h *handlers) usageStats(w http.ResponseWriter, r *http.Request) {
+	if h.stats == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "no_stats", "统计未启用")
+		return
+	}
+	days := 30
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			days = n
+		}
+	}
+	report, err := h.stats.UsageReport(r.Context(), ownerOf(r), days)
+	if err != nil {
+		h.log.Error("usage stats failed", "err", err)
+		writeProblem(w, http.StatusInternalServerError, "internal", "统计查询失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
 }

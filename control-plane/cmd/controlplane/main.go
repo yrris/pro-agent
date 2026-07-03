@@ -71,7 +71,8 @@ func main() {
 	if kbStore != nil { // *Client(nil) 塞进接口会变成非 nil 接口，路由降级判断失效
 		kbIface = kbStore
 	}
-	router := api.NewRouter(dispatcher, runs, sessions, events, artStore, healthChecks, kbIface, client, cfg.RunTimeout, cfg.WebDir, log)
+	statsRepo := store.NewStatsRepository(pool)
+	router := api.NewRouter(dispatcher, runs, sessions, events, artStore, healthChecks, kbIface, client, statsRepo, cfg.RunTimeout, cfg.WebDir, log)
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: router}
 
