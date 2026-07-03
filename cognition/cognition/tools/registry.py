@@ -73,6 +73,13 @@ async def build_tool_suite(
         subgraph = build_rag_subgraph(settings)  # 装配期编译一次（含 store/embedder/rerank 预热）
         tools.append(build_knowledge_search_tool(subgraph, settings))
 
+    # —— 图像生成：provider 配置非空才注册（镜像 rag_enabled 门控）——
+    if getattr(settings, "image_gen_provider", ""):
+        from cognition.providers.image import build_image_provider
+        from cognition.tools.image_generate import build_image_generate_tool
+
+        tools.append(build_image_generate_tool(build_image_provider(settings), settings))
+
     # —— Skill：扫描 SKILL.md + 构建工具 ——
     if settings.skills_enabled and settings.skills_dirs:
         from cognition.skills.registry import SkillRegistry

@@ -165,6 +165,25 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("COGNITION_LANGFUSE_HOST", "LANGFUSE_HOST"),
     )
 
+    # —— 图像生成（M9 线 B：provider 抽象可切换，国产便宜模型优先）——
+    # 空串=不注册 image_generate 工具（镜像 rag_enabled 门控先例）；fake 供测试/离线。
+    image_gen_provider: str = Field(
+        default="",  # "" | "fake" | "ark"(火山方舟豆包) | "wanx"(通义万相)
+        validation_alias=AliasChoices("COGNITION_IMAGE_GEN_PROVIDER", "IMAGE_GEN_PROVIDER"),
+    )
+    image_gen_model: str = Field(
+        default="",  # 空则用各 provider 默认（ark: doubao-seedream；wanx: wanx2.1-t2i-turbo）
+        validation_alias=AliasChoices("COGNITION_IMAGE_GEN_MODEL", "IMAGE_GEN_MODEL"),
+    )
+    image_gen_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "COGNITION_IMAGE_GEN_API_KEY", "IMAGE_GEN_API_KEY", "ARK_API_KEY", "DASHSCOPE_API_KEY"
+        ),
+    )
+    image_gen_base_url: str = Field(default="")  # 空则用各 provider 默认端点
+    image_gen_size: str = Field(default="1024x1024")
+
     # —— 输出格式模板（M9，镜像原项目 applyOutputStyle）——
     # 前端格式选择器的值→追加提示词；未知值忽略。per-run 经 config.metadata 注入
     #（react=think 调用期临时前置 system；plan=planner system 拼接），绝不进 checkpoint。
