@@ -76,6 +76,15 @@ PLANNER_SYSTEM = (
     "直接写进步骤文本。产出必须明确（生成文件的步骤要点名用 write_report 工具）。"
 )
 
+def compose_planner_system(
+    planner_system: str, sop: str, output_format: str, format_prompts: dict[str, str]
+) -> str:
+    """拼 planner 系统提示词（纯函数）：{{sop}} 槽 + per-run 输出格式模板（未知值忽略）。"""
+    text = planner_system.replace("{{sop}}", sop)
+    extra = format_prompts.get(output_format or "", "")
+    return f"{text}\n\n{extra}" if extra else text
+
+
 # 深度研究模式的规划器提示词（M9：agent_type=deep_research 用第二编译图，
 # 拓扑与 plan_solve 完全相同，仅提示词与轮次预算不同——"配置化变体而非新图"）。
 RESEARCH_PLANNER_SYSTEM = (
@@ -282,6 +291,7 @@ class PlanExecuteState(TypedDict, total=False):
     round: int           # 当前 dispatch 轮（executor 子任务按此轮 tag/消费）
     step: int            # 预留
     reduced_state: str   # 上一轮并行归约结果（ERROR/IDLE/FINISHED）
+    output_format: str   # M9：per-run 输出格式（planner system 拼接；镜像 sop 的注入模式）
     planner_messages: Annotated[list, add_messages]
     sub_results: Annotated[list[SubResult], merge_sub_results]
 
@@ -351,6 +361,7 @@ def build_plan_execute_graph(
     react_recursion_limit: int = 85,
     checkpointer: Optional[BaseCheckpointSaver] = None,
     planner_system: str = PLANNER_SYSTEM,
+    format_prompts: Optional[dict[str, str]] = None,
 ) -> CompiledStateGraph:
     """装配并编译 Plan-Execute 图。
 
@@ -400,7 +411,10 @@ def build_plan_execute_graph(
         # tool_calls 永远没有 ToolMessage 应答，真实 provider（DeepSeek/OpenAI/Anthropic）
         # 第二轮起会 400。入模型前做修复投影（补合成应答），state 原样累积不动。
         history = repair_dangling_tool_calls(list(state.get("planner_messages") or []))
-        system = SystemMessage(content=planner_system.replace("{{sop}}", sop))
+        system_text = compose_planner_system(
+            planner_system, sop, state.get("output_format", ""), format_prompts or {}
+        )
+        system = SystemMessage(content=system_text)
 
         new_msgs: list = []
         reduced: Optional[str] = None

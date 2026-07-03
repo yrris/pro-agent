@@ -165,6 +165,30 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("COGNITION_LANGFUSE_HOST", "LANGFUSE_HOST"),
     )
 
+    # —— 输出格式模板（M9，镜像原项目 applyOutputStyle）——
+    # 前端格式选择器的值→追加提示词；未知值忽略。per-run 经 config.metadata 注入
+    #（react=think 调用期临时前置 system；plan=planner system 拼接），绝不进 checkpoint。
+    output_format_prompts: dict[str, str] = Field(
+        default={
+            "html": (
+                "输出格式要求：最终交付一份**独立完整的 HTML 网页**。调用 ppt-generation 技能的 "
+                "md_to_html.py 脚本产出可下载的 document.html 产物，正文中概述网页结构与内容要点。"
+            ),
+            "docs": (
+                "输出格式要求：最终回答以**结构化文档**形态呈现——清晰的标题层级、小节、要点列表与"
+                "结尾总结，可直接复制为正式文档；篇幅较长时调用 write_report 产出 markdown 文件。"
+            ),
+            "ppt": (
+                "输出格式要求：最终交付一份**演示文稿**。调用 ppt-generation 技能的 build_pptx.py "
+                "生成 presentation.pptx（标题页+要点页，每页 3-6 个要点），并在正文中概述每页内容。"
+            ),
+            "table": (
+                "输出格式要求：最终回答以 **Markdown 表格**为主组织信息（配少量说明文字）；"
+                "表头明确、单位统一、必要时多张表分主题呈现。"
+            ),
+        }
+    )
+
     # 确定性脚本化模型开关：无需真实 LLM key 即可端到端验证（见 providers/fake.py）。
     fake_model: bool = Field(default=False)
 

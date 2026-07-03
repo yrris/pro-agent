@@ -88,12 +88,15 @@ async def serve(settings: Settings | None = None) -> None:
     react_graph = build_react_graph(
         react_model, tools, checkpointer=checkpointer,
         max_steps=settings.max_steps, history_policy=history_policy, expander=expander,
+        format_prompts=settings.output_format_prompts,
     )
 
     # Plan-Execute：executor 复用一套 ReAct 子图（无 checkpointer，分支级 thread 隔离）。
+    # format_prompts 同样注入——executor 分支经 metadata spread 拿到 output_format。
     executor_subgraph = build_react_graph(
         executor_model, tools, max_steps=settings.max_steps,
         history_policy=history_policy, expander=expander,
+        format_prompts=settings.output_format_prompts,
     )
     plan_graph = build_plan_execute_graph(
         planner_model,
@@ -105,6 +108,7 @@ async def serve(settings: Settings | None = None) -> None:
         branch_timeout=settings.branch_timeout_seconds,
         react_recursion_limit=2 * settings.max_steps + 5,
         checkpointer=checkpointer,
+        format_prompts=settings.output_format_prompts,
     )
     # deep_research：同拓扑第二编译图（研究提示词 + 更高轮次预算，executor 子图共享）。
     from cognition.graphs.plan_execute import RESEARCH_PLANNER_SYSTEM
@@ -120,6 +124,7 @@ async def serve(settings: Settings | None = None) -> None:
         react_recursion_limit=2 * settings.max_steps + 5,
         checkpointer=checkpointer,
         planner_system=RESEARCH_PLANNER_SYSTEM,
+        format_prompts=settings.output_format_prompts,
     )
 
     server = grpc.aio.server()

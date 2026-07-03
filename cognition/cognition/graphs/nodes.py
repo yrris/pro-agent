@@ -11,6 +11,8 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import SystemMessage
+from langchain_core.runnables import RunnableConfig
 
 from cognition.graphs.history import (
     HistoryPolicy,
@@ -20,11 +22,25 @@ from cognition.graphs.history import (
 from cognition.graphs.state import AgentState
 
 
+def format_prompt_from_config(config: Optional[RunnableConfig], prompts: dict[str, str]) -> str:
+    """从 config.metadata 取 output_format 并映射为提示词（未知值/缺省→空串）。
+
+    per-run 值走 config 而非 state：绝不把 SystemMessage 写进 checkpoint——
+    持久化后不同格式的多轮 run 会累积互相矛盾的指令，且中位 system 消息会被
+    langchain-anthropic 直接拒绝（续聊切 Claude 即 400）。
+    """
+    if not config or not prompts:
+        return ""
+    fmt = str((config.get("metadata") or {}).get("output_format", "") or "")
+    return prompts.get(fmt, "")
+
+
 def make_think_node(
     model: BaseChatModel,
     *,
     history_policy: Optional[HistoryPolicy] = None,
     expander: Optional[Callable[[list], list]] = None,
+    format_prompts: Optional[dict[str, str]] = None,
 ) -> Callable[[AgentState], dict]:
     """构造 think 节点（闭包注入模型）。
 
@@ -41,13 +57,18 @@ def make_think_node(
        ——放最后：裁剪按占位估价，展开后的大 base64 只活在本次模型调用里。
     """
 
-    def think(state: AgentState) -> dict:
+    def think(state: AgentState, config: RunnableConfig = None) -> dict:  # type: ignore[assignment]
         step = int(state.get("step", 0))
         messages = repair_dangling_tool_calls(state["messages"])
         if history_policy is not None:
             messages = plan_history_reduction(messages, history_policy).messages
         if expander is not None:
             messages = expander(messages)
+        # 输出格式：调用期临时前置 leading SystemMessage（只活在本次 invoke，
+        # 不进 checkpoint；plan 的 executor 分支经 metadata spread 免费获得）。
+        fmt_prompt = format_prompt_from_config(config, format_prompts or {})
+        if fmt_prompt:
+            messages = [SystemMessage(content=fmt_prompt), *messages]
         ai_msg = model.invoke(messages)
         return {"messages": [ai_msg], "step": step + 1}
 

@@ -159,8 +159,8 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 func TestEndToEnd_AttachmentsAndOwnerMetadata(t *testing.T) {
 	env := newE2EEnv(t)
 
-	// 1) 合法附件：透传至 proto RunRequest（attachments + metadata.owner_id）。
-	body := `{"query":"这份文档讲什么","sessionId":"sess-att",` +
+	// 1) 合法附件：透传至 proto RunRequest（attachments + metadata.owner_id/output_format/agent_type）。
+	body := `{"query":"这份文档讲什么","sessionId":"sess-att","agentType":"deep_research","outputFormat":"table",` +
 		`"attachments":[{"resourceKey":"uploads/u1/sess-att/ab12-doc.txt","fileName":"doc.txt","mimeType":"text/plain","size":6}]}`
 	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(body))
 	req.Header.Set("X-User-Id", "u1")
@@ -180,6 +180,13 @@ func TestEndToEnd_AttachmentsAndOwnerMetadata(t *testing.T) {
 	}
 	if got.GetMetadata()["owner_id"] != "u1" {
 		t.Fatalf("owner_id 未进 metadata: %v", got.GetMetadata())
+	}
+	// M9：三档白名单放行 deep_research；输出格式经 metadata 透传。
+	if got.GetAgentType() != "deep_research" {
+		t.Fatalf("deep_research 未过白名单: %s", got.GetAgentType())
+	}
+	if got.GetMetadata()["output_format"] != "table" {
+		t.Fatalf("output_format 未进 metadata: %v", got.GetMetadata())
 	}
 
 	// 2) 伪造他人 key → 403，且不落 run、不发 SSE。

@@ -27,12 +27,13 @@ type Attachment struct {
 
 // StartCommand 是一次 run 的启动入参。
 type StartCommand struct {
-	RunID       string
-	SessionID   string
-	OwnerID     string
-	Query       string
-	AgentType   string // "react" | "plan_solve"
-	Attachments []Attachment
+	RunID        string
+	SessionID    string
+	OwnerID      string
+	OutputFormat string // M9：输出格式（透传认知面 metadata）
+	Query        string
+	AgentType    string // "react" | "plan_solve"
+	Attachments  []Attachment
 }
 
 // Dispatcher 持有并发闸与运行时协作者。
@@ -98,7 +99,7 @@ func (d *Dispatcher) Run(ctx context.Context, cmd StartCommand, sink stream.Sink
 		atts = append(atts, cognition.Attachment(a))
 	}
 	st, err := d.client.RunAgent(ctx, cognition.RunRequest{
-		RunID: cmd.RunID, SessionID: cmd.SessionID, Query: cmd.Query, AgentType: agentType,
+		RunID: cmd.RunID, SessionID: cmd.SessionID, Query: cmd.Query, AgentType: agentType, OutputFormat: cmd.OutputFormat,
 		MaxSteps: d.maxSteps, OwnerID: cmd.OwnerID, Attachments: atts,
 	})
 	if err != nil {

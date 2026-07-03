@@ -82,10 +82,11 @@ type attachmentRef struct {
 }
 
 type startRunRequest struct {
-	Query       string          `json:"query"`
-	SessionID   string          `json:"sessionId"`
-	AgentType   string          `json:"agentType"` // "react"(默认) | "plan_solve"
-	Attachments []attachmentRef `json:"attachments"`
+	Query        string          `json:"query"`
+	SessionID    string          `json:"sessionId"`
+	AgentType    string          `json:"agentType"`    // "react"(默认) | "plan_solve" | "deep_research"
+	OutputFormat string          `json:"outputFormat"` // M9：html/docs/ppt/table（空=自由格式）
+	Attachments  []attachmentRef `json:"attachments"`
 }
 
 func (h *handlers) startRun(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +141,7 @@ func (h *handlers) startRun(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	if err := h.dispatcher.Run(runCtx, dispatch.StartCommand{
-		RunID: runID, SessionID: sessionID, OwnerID: ownerID, Query: body.Query, AgentType: agentType,
+		RunID: runID, SessionID: sessionID, OwnerID: ownerID, Query: body.Query, AgentType: agentType, OutputFormat: body.OutputFormat,
 		Attachments: atts,
 	}, sink); err != nil {
 		h.log.Error("run failed", "runID", runID, "err", err)

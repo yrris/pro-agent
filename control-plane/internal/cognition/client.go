@@ -25,13 +25,14 @@ type Attachment struct {
 
 // RunRequest 是发起一次认知 run 的入参。
 type RunRequest struct {
-	RunID       string
-	SessionID   string
-	Query       string
-	AgentType   string
-	MaxSteps    int32
-	OwnerID     string // 经 proto metadata["owner_id"] 传认知面（owner 级知识库归属）
-	Attachments []Attachment
+	RunID        string
+	SessionID    string
+	Query        string
+	AgentType    string
+	MaxSteps     int32
+	OwnerID      string // 经 proto metadata["owner_id"] 传认知面（owner 级知识库归属）
+	OutputFormat string // M9：经 metadata["output_format"] 传认知面（html/docs/ppt/table，空=不注入）
+	Attachments  []Attachment
 }
 
 // Stream 是一次 run 的事件流；Recv 在流结束时返回 io.EOF。
@@ -83,9 +84,16 @@ func (c *grpcClient) RunAgent(ctx context.Context, req RunRequest) (Stream, erro
 	if agentType == "" {
 		agentType = "react"
 	}
-	var metadata map[string]string
+	// metadata：先建 map 再条件填（owner_id / output_format），全空则保持 nil。
+	metadata := map[string]string{}
 	if req.OwnerID != "" {
-		metadata = map[string]string{"owner_id": req.OwnerID}
+		metadata["owner_id"] = req.OwnerID
+	}
+	if req.OutputFormat != "" {
+		metadata["output_format"] = req.OutputFormat
+	}
+	if len(metadata) == 0 {
+		metadata = nil
 	}
 	atts := make([]*agentv1.Attachment, 0, len(req.Attachments))
 	for _, a := range req.Attachments {

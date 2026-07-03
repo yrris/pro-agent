@@ -100,6 +100,7 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
                 # 显式清残留：同会话上一次 run 若以 ERROR 收场，reduced_state 会随
                 # checkpoint 延续，新 run 会被 route_after_planner 直接送去 summary。
                 "reduced_state": "",
+                "output_format": dict(getattr(request, "metadata", {}) or {}).get("output_format", ""),
                 "planner_messages": [],
                 "sub_results": [],
             }
@@ -173,6 +174,11 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
             "kb_id": kb_id,
             "agent_type": agent_type,  # 研究模式的提示门与检索产物例外共用（M9）
         }
+        output_format = dict(request.metadata).get("output_format", "")
+        if output_format:
+            # per-run 输出格式走 config（react think 调用期临时前置 system；
+            # plan 的 executor 分支经 metadata spread 同机制获得）——不进 checkpoint。
+            metadata["output_format"] = output_format
         if attachments:
             import json as _json
 
