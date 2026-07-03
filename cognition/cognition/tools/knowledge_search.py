@@ -1,7 +1,10 @@
 """knowledge_search 工具：把 Agentic RAG 子图包成一个本地工具暴露给外层图。
 
-外层 ReAct/Plan-Execute 只看到一次 tool_call/tool_result；答案作 observation（内联〔n〕），
-来源作 `search-results.md` ArtifactRef（复用 report.py 的惰性/可降级 MinIO 上传与 Go /artifacts 代理）。
+外层 ReAct/Plan-Execute 只看到一次 tool_call/tool_result；答案作 observation（内联〔n〕）。
+产物策略（M9 UX 修正）：**默认不登记 artifact**——检索是过程证据不是交付物，ReAct 一轮
+6-8 次检索会把产物区刷成 8 份同名文件（业界一致做法是折叠为步骤摘要）。例外：
+- settings.search_artifact_enabled=True 显式开启；
+- deep_research 模式（检索证据属于研究交付物），且用 tool_call_id 后缀唯一命名防同名刷屏。
 子图内部的 route/expand/retrieve/reflect/rerank/generate 事件不外泄（proto/Go 零改）。
 """
 
@@ -28,6 +31,21 @@ def _kb_id_from_config(config: Optional[RunnableConfig]) -> str:
     return str(meta.get("kb_id") or "")
 
 
+def _agent_type_from_config(config: Optional[RunnableConfig]) -> str:
+    if not config:
+        return ""
+    meta = config.get("metadata") or {}
+    return str(meta.get("agent_type") or "")
+
+
+def search_artifact_file_name(agent_type: str, tool_call_id: str) -> Optional[str]:
+    """产物登记决策（纯函数）：None=不登记；deep_research 用 tcid 后缀唯一命名。"""
+    if agent_type == "deep_research":
+        suffix = (tool_call_id or "tc")[:6]
+        return f"search-results-{suffix}.md"
+    return None
+
+
 def build_knowledge_search_tool(subgraph: Any, settings: Settings) -> BaseTool:
     """用编译好的 RAG 子图构建 knowledge_search 工具（装配期一次）。"""
 
@@ -49,23 +67,34 @@ def build_knowledge_search_tool(subgraph: Any, settings: Settings) -> BaseTool:
         answer = str(result.get("answer", "") or "")
         sources = result.get("sources", []) or []
 
-        run_id = _run_id_from_config(config)
+        # 产物门：默认不登记（过程≠交付物）；显式开关或 deep_research 例外。
         tcid = tool_call_id or "tc"
-        resource_key = f"{run_id}/{tcid}/{_FILE_NAME}"
+        file_name: Optional[str] = None
+        if getattr(settings, "search_artifact_enabled", False):
+            file_name = _FILE_NAME
+        else:
+            file_name = search_artifact_file_name(_agent_type_from_config(config), tcid)
+
+        if file_name is None:
+            summary = answer + (f"\n（依据 {len(sources)} 条来源）" if sources else "")
+            return summary, None
+
+        run_id = _run_id_from_config(config)
+        resource_key = f"{run_id}/{tcid}/{file_name}"
         body = sources_to_artifact_md(query, answer, sources).encode("utf-8")
         _maybe_upload(settings, resource_key, body, _MIME)
 
         artifact = {
             "resource_key": resource_key,
-            "name": _FILE_NAME,
-            "file_name": _FILE_NAME,
+            "name": file_name,
+            "file_name": file_name,
             "mime_type": _MIME,
             "size": len(body),
             "download_url": f"/artifacts/{resource_key}",
             "preview_url": f"/artifacts/{resource_key}",
             "missing": False,
         }
-        summary = answer + (f"\n（依据 {len(sources)} 条来源，详见 {_FILE_NAME}）" if sources else "")
+        summary = answer + (f"\n（依据 {len(sources)} 条来源，详见 {file_name}）" if sources else "")
         return summary, artifact
 
     tool = StructuredTool.from_function(

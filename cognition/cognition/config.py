@@ -140,6 +140,9 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("COGNITION_RERANK_API_KEY", "SILICONFLOW_API_KEY"),
     )
     rerank_threshold: float = Field(default=0.0, ge=0.0)  # 真实 reranker 用 0.3；fake 用 0.0
+    # 检索产物登记（M9 UX 修正）：默认关——ReAct 一轮多次检索会把产物区刷成
+    # N 份同名 search-results.md（过程≠交付物）；deep_research 模式例外（唯一命名）。
+    search_artifact_enabled: bool = Field(default=False)
     # 检索/反思参数
     rag_top_k: int = Field(default=10, ge=1)
     rag_rerank_top_k: int = Field(default=5, ge=1)

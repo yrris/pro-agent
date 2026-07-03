@@ -32,34 +32,63 @@ class _FakeModel:
         return SimpleNamespace(content="混合检索结合稠密与稀疏向量〔1〕。")
 
 
-def _tool():
+def _tool(**settings_kw):
     store = QdrantStore(QdrantClient(location=":memory:"), "docs", DIM)
     emb, sp = FakeEmbedder(DIM), FakeSparseEmbedder()
     ingest([{"text": "混合检索用稠密+稀疏向量并 RRF 融合。", "file_name": "h.md"}],
            kb_id="kb1", store=store, embedder=emb, sparse=sp)
-    settings = Settings(rag_enabled=True, rerank_enabled=True, embedding_dimension=DIM)
+    settings = Settings(rag_enabled=True, rerank_enabled=True, embedding_dimension=DIM, **settings_kw)
     sub = build_rag_subgraph(settings, model=_FakeModel(),
                              retriever=Retriever(store, emb, sp, top_k=5), reranker=FakeReranker())
     return build_knowledge_search_tool(sub, settings)
 
 
-async def test_tool_returns_content_and_artifact():
+async def test_tool_silent_by_default_registers_when_enabled():
+    """M9 降噪：默认不登记产物（过程≠交付物，一轮 N 次检索会刷屏同名文件）；
+    search_artifact_enabled=True 恢复旧行为。"""
     tool = _tool()
     msg = await tool.ainvoke(
         {"args": {"query": "什么是混合检索", "kb_id": "kb1"},
          "id": "call-1", "name": "knowledge_search", "type": "tool_call"}
     )
-    assert "混合检索" in msg.content
-    art = msg.artifact
+    assert "混合检索" in msg.content and "来源" in msg.content  # 内联引用与来源计数保留
+    assert msg.artifact is None
+    assert tool.metadata["provider"] == "local"
+
+    tool_on = _tool(search_artifact_enabled=True)
+    msg2 = await tool_on.ainvoke(
+        {"args": {"query": "什么是混合检索", "kb_id": "kb1"},
+         "id": "call-1", "name": "knowledge_search", "type": "tool_call"}
+    )
+    art = msg2.artifact
     assert art["file_name"] == "search-results.md"
     assert art["download_url"] == "/artifacts/run/call-1/search-results.md"
     assert art["mime_type"] == "text/markdown"
     assert art["size"] > 0 and art["missing"] is False
-    assert tool.metadata["provider"] == "local"
+
+
+async def test_deep_research_registers_with_unique_name():
+    """deep_research 例外：检索证据属于研究交付物——登记且按 tcid 唯一命名不刷屏。"""
+    tool = _tool()
+    msg = await tool.ainvoke(
+        {"args": {"query": "什么是混合检索", "kb_id": "kb1"},
+         "id": "abcdef99", "name": "knowledge_search", "type": "tool_call"},
+        config={"metadata": {"agent_type": "deep_research", "request_id": "r1"}},
+    )
+    assert msg.artifact is not None
+    assert msg.artifact["file_name"] == "search-results-abcdef.md"
+
+    # 非研究模式带 config 也保持静默。
+    msg2 = await tool.ainvoke(
+        {"args": {"query": "什么是混合检索", "kb_id": "kb1"},
+         "id": "c3", "name": "knowledge_search", "type": "tool_call"},
+        config={"metadata": {"agent_type": "react", "request_id": "r1"}},
+    )
+    assert msg2.artifact is None
 
 
 async def test_tool_result_maps_to_artifact_refs():
-    tool = _tool()
+    tool = _tool(search_artifact_enabled=True)
     msg = await tool.ainvoke(
         {"args": {"query": "什么是混合检索", "kb_id": "kb1"},
          "id": "c9", "name": "knowledge_search", "type": "tool_call"}
