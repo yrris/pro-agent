@@ -192,29 +192,36 @@ export function useRunStream() {
     [beginGen, clearView, setStatus],
   );
 
-  // M11 HITL：审批决议 → 恢复 run（新一轮，与 start 同构）。归档前先本地补丁
-  // 当前 live 轮该审批的状态——run1 账本只记"请求"，决议链在 run2；不打补丁的话
-  // 归档轮的卡仍显示可操作 pending（二次点击只会得到优雅的"没有待审批"轮）。
+  // 把某轮（live 或 timeline 中）某个审批的状态原位补丁——用于乐观置为 approved/rejected
+  // 或失败回滚。挂起轮可能是 live（同会话现点）也可能在 timeline（刷新/切会话后从回放渲染）。
+  const patchApproval = useCallback(
+    (runId: string, approvalId: string, status: "pending" | "approved" | "rejected") => {
+      const patch = (turn: RunTurn): RunTurn => {
+        const a = turn.state.approvals[approvalId];
+        if (turn.runId !== runId || !a) return turn;
+        return {
+          ...turn,
+          state: { ...turn.state, approvals: { ...turn.state.approvals, [approvalId]: { ...a, status } } },
+        };
+      };
+      if (liveRef.current) {
+        liveRef.current = patch(liveRef.current);
+        setLive(liveRef.current);
+      }
+      setTimeline((t) => t.map(patch));
+    },
+    [],
+  );
+
+  // M11 HITL：审批决议 → 恢复 run（新一轮，与 start 同构）。pausedRunId 由调用方按
+  // 卡片所在轮传入（**不依赖 liveRef**——刷新/隔夜后挂起轮只存在于 timeline，这正是
+  // "跨重启审批"卖点必须支持的路径）。乐观补丁那轮的审批状态；失败回滚 + 抛错让卡复位。
   const resumeApproval = useCallback(
-    async (approvalId: string, approved: boolean, comment?: string): Promise<string> => {
-      const paused = liveRef.current ?? null;
-      const pausedRunId = paused?.runId ?? "";
+    async (pausedRunId: string, approvalId: string, approved: boolean, comment?: string): Promise<string> => {
       if (!pausedRunId) return "";
       const gen = beginGen();
-      if (liveRef.current?.state.approvals[approvalId]) {
-        const st = liveRef.current.state;
-        liveRef.current = {
-          ...liveRef.current,
-          state: {
-            ...st,
-            approvals: {
-              ...st.approvals,
-              [approvalId]: { ...st.approvals[approvalId], status: approved ? "approved" : "rejected" },
-            },
-          },
-        };
-      }
-      archiveLive();
+      archiveLive(); // 若 live 是挂起轮，先归档进 timeline（补丁在其后统一处理）
+      patchApproval(pausedRunId, approvalId, approved ? "approved" : "rejected");
       setError("");
       setStatus("running");
       const label = `[审批] ${approved ? "通过" : "拒绝"}${comment ? `：${comment}` : ""}`;
@@ -231,13 +238,17 @@ export function useRunStream() {
         return runId;
       } catch (e) {
         if (genRef.current === gen) {
+          // 回滚乐观补丁（卡回 pending 可重试）+ 撤掉空的恢复轮 live + 报错。
+          liveRef.current = null;
+          setLive(null);
+          patchApproval(pausedRunId, approvalId, "pending");
           setStatus("error");
           setError(e instanceof Error ? e.message : String(e));
         }
         return "";
       }
     },
-    [archiveLive, beginGen, pump, setStatus],
+    [archiveLive, beginGen, patchApproval, pump, setStatus],
   );
 
   return { timeline, live, status, error, loadingHistory, start, loadSession, resetAll, resumeApproval };

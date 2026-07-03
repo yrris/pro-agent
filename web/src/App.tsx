@@ -113,10 +113,10 @@ export default function App() {
 
   // M11 HITL：审批决议（稳定引用——MessageList memo 纪律）。
   const onApprovalDecision = useCallback(
-    (approvalId: string, approved: boolean, comment?: string) => {
-      void run.resumeApproval(approvalId, approved, comment).then((runId) => {
-        if (runId) void refreshSessions();
-      });
+    async (runId: string, approvalId: string, approved: boolean, comment?: string): Promise<boolean> => {
+      const newRunId = await run.resumeApproval(runId, approvalId, approved, comment);
+      if (newRunId) void refreshSessions();
+      return !!newRunId; // 供 ApprovalCard 失败复位 busy
     },
     [run, refreshSessions],
   );

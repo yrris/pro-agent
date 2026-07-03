@@ -244,7 +244,12 @@ export function ChatView({
   onArtifactsOpenChange: (open: boolean) => void;
   artifactsWidth: number;
   onArtifactsWidthChange: (w: number) => void;
-  onApprovalDecision?: (approvalId: string, approved: boolean, comment?: string) => void;
+  onApprovalDecision?: (
+    runId: string,
+    approvalId: string,
+    approved: boolean,
+    comment?: string,
+  ) => Promise<boolean> | void;
   onOpenSession?: (sessionId: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);

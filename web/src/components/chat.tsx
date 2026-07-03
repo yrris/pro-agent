@@ -147,16 +147,18 @@ export function ApprovalCard({
   onDecide,
 }: {
   approval: ApprovalView;
-  onDecide?: (approvalId: string, approved: boolean, comment?: string) => void;
+  // 返回决议是否成功——失败（网络/429/无 pending）时重置 busy 让卡可重试。
+  onDecide?: (approvalId: string, approved: boolean, comment?: string) => Promise<boolean> | void;
 }) {
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const pending = approval.status === "pending";
   const actionable = pending && !!onDecide && !busy;
-  const decide = (approved: boolean) => {
+  const decide = async (approved: boolean) => {
     if (!onDecide) return;
     setBusy(true);
-    onDecide(approval.approvalId, approved, comment.trim() || undefined);
+    const ok = await onDecide(approval.approvalId, approved, comment.trim() || undefined);
+    if (ok === false) setBusy(false); // 失败复位（成功时本轮已归档/替换，busy 随卸载消失）
   };
   return (
     <Card className="gap-0 border-amber-500/30 bg-amber-500/[0.06] px-4 py-3">
@@ -182,13 +184,13 @@ export function ApprovalCard({
             className="min-w-0 flex-1 rounded-lg border bg-transparent px-2 py-1 text-xs text-stone-200 outline-none focus:border-stone-500"
           />
           <button
-            onClick={() => decide(true)}
+            onClick={() => void decide(true)}
             className="rounded-lg bg-emerald-600/80 px-3 py-1 text-xs text-white transition-colors hover:bg-emerald-600"
           >
             批准
           </button>
           <button
-            onClick={() => decide(false)}
+            onClick={() => void decide(false)}
             className="rounded-lg bg-rose-600/70 px-3 py-1 text-xs text-white transition-colors hover:bg-rose-600"
           >
             拒绝
@@ -228,8 +230,13 @@ export const MessageList = memo(function MessageList({
   query?: string;
   attachments?: AttachmentRef[];
   running?: boolean;
-  // M11：仅 live 轮/最后一轮传入（历史回放只读）；须为 useCallback 稳定引用（memo 纪律）。
-  onApprovalDecision?: (approvalId: string, approved: boolean, comment?: string) => void;
+  // M11：仅 live 轮/最后一轮传入（历史回放只读）；带上本轮 runId（恢复不依赖 liveRef）。
+  onApprovalDecision?: (
+    runId: string,
+    approvalId: string,
+    approved: boolean,
+    comment?: string,
+  ) => Promise<boolean> | void;
 }) {
   const resultByCall = new Map(state.toolResults.map((r) => [r.toolCallId, r.text]));
   return (
@@ -263,7 +270,11 @@ export const MessageList = memo(function MessageList({
           }
           case "approval": {
             const a = state.approvals[entry.key];
-            return a ? <ApprovalCard key={k} approval={a} onDecide={onApprovalDecision} /> : null;
+            if (!a) return null;
+            const onDecide = onApprovalDecision
+              ? (aid: string, ap: boolean, c?: string) => onApprovalDecision(state.runId, aid, ap, c)
+              : undefined;
+            return <ApprovalCard key={k} approval={a} onDecide={onDecide} />;
           }
           case "result":
             return state.result ? <Conclusion key={k} text={state.result.text} /> : null;
