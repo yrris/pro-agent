@@ -58,6 +58,19 @@ func FromProto(p *agentv1.Event) (Envelope, error) {
 			Text:      payload.Result.GetText(),
 			Artifacts: artifactsFromProto(payload.Result.GetArtifactRefs()),
 		}
+		if u := payload.Result.GetUsage(); u != nil && (u.GetInputTokens() != 0 || u.GetOutputTokens() != 0 || u.GetModelCalls() != 0) {
+			e.Result.Usage = &UsagePayload{
+				InputTokens: u.GetInputTokens(), OutputTokens: u.GetOutputTokens(), ModelCalls: u.GetModelCalls(),
+			}
+		}
+	case *agentv1.Event_Approval:
+		e.Approval = &ApprovalPayload{
+			ApprovalID:         payload.Approval.GetApprovalId(),
+			ToolName:           payload.Approval.GetToolName(),
+			Input:              payload.Approval.GetInput().AsMap(),
+			Reason:             payload.Approval.GetReason(),
+			PendingToolCallIDs: payload.Approval.GetPendingToolCallIds(),
+		}
 	}
 	return e, nil
 }
@@ -124,6 +137,8 @@ func eventTypeFromProto(t agentv1.EventType) MessageType {
 		return TypePlan
 	case agentv1.EventType_EVENT_TYPE_TASK:
 		return TypeTask
+	case agentv1.EventType_EVENT_TYPE_APPROVAL_REQUEST:
+		return TypeApprovalRequest
 	default:
 		return ""
 	}
@@ -144,21 +159,22 @@ func toolStatusFromProto(s agentv1.ToolCallStatus) ToolStatus {
 
 // sseFrame 是浏览器经 SSE 收到的 JSON 形状，字段名兼容原 AgentResponse。
 type sseFrame struct {
-	RequestID    string          `json:"requestId"`
-	MessageID    string          `json:"messageId"`
-	Seq          uint64          `json:"seq"`
-	MessageType  string          `json:"messageType"`
-	MessageTime  string          `json:"messageTime"`
-	IsFinal      bool            `json:"isFinal"`
-	Finish       bool            `json:"finish"`
-	ToolThought  string          `json:"toolThought,omitempty"`
-	ToolResult   *sseToolResult  `json:"toolResult,omitempty"`
-	Result       string          `json:"result,omitempty"`
-	PlanThought  string          `json:"planThought,omitempty"`
-	Plan         *planFrame      `json:"plan,omitempty"`
-	Task         string          `json:"task,omitempty"`
-	ResultMap    map[string]any  `json:"resultMap,omitempty"`
-	ArtifactRefs []ArtifactRef   `json:"artifactRefs,omitempty"`
+	RequestID    string           `json:"requestId"`
+	MessageID    string           `json:"messageId"`
+	Seq          uint64           `json:"seq"`
+	MessageType  string           `json:"messageType"`
+	MessageTime  string           `json:"messageTime"`
+	IsFinal      bool             `json:"isFinal"`
+	Finish       bool             `json:"finish"`
+	ToolThought  string           `json:"toolThought,omitempty"`
+	ToolResult   *sseToolResult   `json:"toolResult,omitempty"`
+	Result       string           `json:"result,omitempty"`
+	PlanThought  string           `json:"planThought,omitempty"`
+	Plan         *planFrame       `json:"plan,omitempty"`
+	Task         string           `json:"task,omitempty"`
+	ResultMap    map[string]any   `json:"resultMap,omitempty"`
+	ArtifactRefs []ArtifactRef    `json:"artifactRefs,omitempty"`
+	Approval     *ApprovalPayload `json:"approval,omitempty"` // M11 HITL
 }
 
 // planFrame 是 SSE 里 plan 对象的形状（plannerRoundId 放 resultMap，不在此）。
@@ -248,6 +264,10 @@ func ToSSEFrame(e Envelope) ([]byte, error) {
 		if e.Task != nil {
 			frame.Task = e.Task.Text
 		}
+	case TypeApprovalRequest:
+		if e.Approval != nil {
+			frame.Approval = e.Approval // 结构体直接入帧（camelCase json tag 已定）
+		}
 	}
 	return json.Marshal(frame)
 }
@@ -266,6 +286,8 @@ func (e Envelope) MarshalPayload() ([]byte, error) {
 		return json.Marshal(e.Plan)
 	case TypeTask:
 		return json.Marshal(e.Task)
+	case TypeApprovalRequest:
+		return json.Marshal(e.Approval)
 	default:
 		return nil, fmt.Errorf("event: cannot marshal payload for type %q", e.Type)
 	}
@@ -305,6 +327,12 @@ func (e *Envelope) UnmarshalPayload(data []byte) error {
 			return err
 		}
 		e.Task = &p
+	case TypeApprovalRequest:
+		var p ApprovalPayload
+		if err := json.Unmarshal(data, &p); err != nil {
+			return err
+		}
+		e.Approval = &p
 	default:
 		return fmt.Errorf("event: cannot unmarshal payload for type %q", e.Type)
 	}

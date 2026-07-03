@@ -60,6 +60,7 @@ func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.
 	r.Get("/healthz", h.healthz)
 	r.Post("/runs", h.startRun)
 	r.Get("/runs/{runID}/events", h.replay)
+	r.Post("/runs/{runID}/approvals", h.resolveApproval) // M11 HITL：决议→恢复 run（SSE）
 	r.Get("/sessions", h.listSessions)
 	r.Get("/sessions/{sessionID}/runs", h.listSessionRuns)
 	r.Post("/uploads", h.upload)
@@ -127,7 +128,15 @@ func (h *handlers) startRun(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// 准入必须在写任何响应头之前，满载则干净地回 429。
+	h.streamRun(w, r, dispatch.StartCommand{
+		SessionID: sessionID, OwnerID: ownerID, Query: body.Query, AgentType: agentType, OutputFormat: body.OutputFormat,
+		Attachments: atts,
+	})
+}
+
+// streamRun：准入 → SSE 头 + X-Run-Id → 以 SSE 流承载一次 run（startRun 与审批恢复共用）。
+// cmd.RunID 留空则生成；准入必须在写任何响应头之前，满载干净回 429。
+func (h *handlers) streamRun(w http.ResponseWriter, r *http.Request, cmd dispatch.StartCommand) {
 	release, ok := h.dispatcher.Admit()
 	if !ok {
 		writeProblem(w, http.StatusTooManyRequests, "busy", "系统繁忙，请稍后重试")
@@ -135,9 +144,11 @@ func (h *handlers) startRun(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
-	runID := uuid.NewString()
+	if cmd.RunID == "" {
+		cmd.RunID = uuid.NewString()
+	}
 	writeSSEHeaders(w)
-	w.Header().Set("X-Run-Id", runID)
+	w.Header().Set("X-Run-Id", cmd.RunID)
 	w.WriteHeader(http.StatusOK)
 	sink, err := newSSESink(w)
 	if err != nil {
@@ -148,12 +159,52 @@ func (h *handlers) startRun(w http.ResponseWriter, r *http.Request) {
 	runCtx, cancel := context.WithTimeout(r.Context(), h.runTimeout)
 	defer cancel()
 
-	if err := h.dispatcher.Run(runCtx, dispatch.StartCommand{
-		RunID: runID, SessionID: sessionID, OwnerID: ownerID, Query: body.Query, AgentType: agentType, OutputFormat: body.OutputFormat,
-		Attachments: atts,
-	}, sink); err != nil {
-		h.log.Error("run failed", "runID", runID, "err", err)
+	if err := h.dispatcher.Run(runCtx, cmd, sink); err != nil {
+		h.log.Error("run failed", "runID", cmd.RunID, "err", err)
 	}
+}
+
+type resolveApprovalRequest struct {
+	ApprovalID string `json:"approvalId"`
+	Approved   bool   `json:"approved"`
+	Comment    string `json:"comment"`
+}
+
+// resolveApproval：POST /runs/{runID}/approvals —— 审批=run 边界的恢复端。
+// 归属校验循 replay 模式；响应即新 run 的 SSE 流（与 POST /runs 同构，X-Run-Id 可取）。
+// 决议乘 metadata 走既有 Run RPC；认知面校验 pending interrupt 匹配（伪造/过期→优雅收尾）。
+func (h *handlers) resolveApproval(w http.ResponseWriter, r *http.Request) {
+	runID := chi.URLParam(r, "runID")
+	run, err := h.runs.GetRun(r.Context(), runID)
+	if errors.Is(err, store.ErrRunNotFound) {
+		writeProblem(w, http.StatusNotFound, "not_found", "run 不存在")
+		return
+	}
+	if err != nil {
+		writeProblem(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if run.OwnerID != ownerOf(r) {
+		writeProblem(w, http.StatusForbidden, "forbidden", "无权访问该 run")
+		return
+	}
+	var body resolveApprovalRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ApprovalID == "" {
+		writeProblem(w, http.StatusBadRequest, "bad_request", "approvalId 必填")
+		return
+	}
+	verdict, decision := "通过", "approved"
+	if !body.Approved {
+		verdict, decision = "拒绝", "rejected"
+	}
+	query := "[审批] " + verdict
+	if body.Comment != "" {
+		query += "：" + body.Comment
+	}
+	h.streamRun(w, r, dispatch.StartCommand{
+		SessionID: run.SessionID, OwnerID: run.OwnerID, Query: query, AgentType: "react",
+		ApprovalResumeID: body.ApprovalID, ApprovalDecision: decision, ApprovalComment: body.Comment,
+	})
 }
 
 func (h *handlers) replay(w http.ResponseWriter, r *http.Request) {

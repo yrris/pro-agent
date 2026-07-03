@@ -76,6 +76,14 @@ func (e Envelope) Validate() error {
 		if !e.IsFinal {
 			return fmt.Errorf("event: task must have isFinal=true")
 		}
+	case TypeApprovalRequest:
+		if e.Approval == nil {
+			return fmt.Errorf("event: approval_request requires approval payload")
+		}
+		if !e.IsFinal {
+			return fmt.Errorf("event: approval_request must have isFinal=true")
+		}
+		// (Type==Result)!=Finish 硬不变量已自动禁止 finish=true——审批=run 边界。
 	default:
 		return fmt.Errorf("event: invalid message type %q", e.Type)
 	}

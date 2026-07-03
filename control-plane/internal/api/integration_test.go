@@ -51,9 +51,14 @@ func (f *fakeCog) Run(req *agentv1.RunRequest, srv grpc.ServerStreamingServer[ag
 	f.mu.Unlock()
 	runID := req.GetRunId()
 	var events []*agentv1.Event
-	if req.GetAgentType() == "plan_solve" {
+	switch {
+	case req.GetMetadata()["approval_resume_id"] != "":
+		events = approvalResumeEvents(runID)
+	case strings.Contains(req.GetQuery(), "需要审批"):
+		events = approvalPauseEvents(runID)
+	case req.GetAgentType() == "plan_solve":
 		events = planEvents(runID)
-	} else {
+	default:
 		events = reactEvents(runID)
 	}
 	for _, e := range events {
@@ -98,6 +103,32 @@ func planEvents(runID string) []*agentv1.Event {
 			Payload: &agentv1.Event_ToolResult{ToolResult: &agentv1.ToolPayload{ToolCallId: "b1:tc1", ToolName: "calculator", Input: in, ToolResult: "5"}}},
 		{Seq: 7, RunId: runID, MessageId: runID + ":result", Type: agentv1.EventType_EVENT_TYPE_RESULT, TsUnixMs: ts, IsFinal: true, Finish: true,
 			Payload: &agentv1.Event_Result{Result: &agentv1.ResultPayload{Text: "计算完成：2+3=5"}}},
+	}
+}
+
+// approvalPauseEvents：run1 挂起——thought + RUNNING 工具卡 + approval_request + 挂起 result。
+func approvalPauseEvents(runID string) []*agentv1.Event {
+	in, _ := structpb.NewStruct(map[string]any{"expression": "rm -rf /"})
+	apIn, _ := structpb.NewStruct(map[string]any{"expression": "rm -rf /"})
+	return []*agentv1.Event{
+		{Seq: 1, RunId: runID, MessageId: runID + ":think:1", Type: agentv1.EventType_EVENT_TYPE_TOOL_THOUGHT, TsUnixMs: ts, IsFinal: true,
+			Payload: &agentv1.Event_ToolThought{ToolThought: &agentv1.ThoughtPayload{Text: "高危操作，先请求授权"}}},
+		{Seq: 2, RunId: runID, MessageId: "tc-danger", Type: agentv1.EventType_EVENT_TYPE_TOOL_CALL, TsUnixMs: ts, IsFinal: false,
+			Payload: &agentv1.Event_ToolCall{ToolCall: &agentv1.ToolPayload{ToolCallId: "tc-danger", ToolName: "calculator", ToolProvider: "local", Status: agentv1.ToolCallStatus_TOOL_CALL_STATUS_RUNNING, DispatchIndex: 1, Input: in, Summary: "正在调用 calculator"}}},
+		{Seq: 3, RunId: runID, MessageId: runID + ":approval:ap-1", Type: agentv1.EventType_EVENT_TYPE_APPROVAL_REQUEST, TsUnixMs: ts, IsFinal: true,
+			Payload: &agentv1.Event_Approval{Approval: &agentv1.ApprovalPayload{ApprovalId: "ap-1", ToolName: "calculator", Input: apIn, Reason: "高危", PendingToolCallIds: []string{"tc-danger"}}}},
+		{Seq: 4, RunId: runID, MessageId: runID + ":result", Type: agentv1.EventType_EVENT_TYPE_RESULT, TsUnixMs: ts, IsFinal: true, Finish: true,
+			Payload: &agentv1.Event_Result{Result: &agentv1.ResultPayload{Text: "⏸ 已挂起等待人工审批"}}},
+	}
+}
+
+// approvalResumeEvents：run2 决议——注记 + 工具完成 + 终态（含 usage 供 W5 断言）。
+func approvalResumeEvents(runID string) []*agentv1.Event {
+	return []*agentv1.Event{
+		{Seq: 1, RunId: runID, MessageId: runID + ":info:1", Type: agentv1.EventType_EVENT_TYPE_TOOL_THOUGHT, TsUnixMs: ts, IsFinal: true,
+			Payload: &agentv1.Event_ToolThought{ToolThought: &agentv1.ThoughtPayload{Text: "人工审批已批准 ✅"}}},
+		{Seq: 2, RunId: runID, MessageId: runID + ":result", Type: agentv1.EventType_EVENT_TYPE_RESULT, TsUnixMs: ts, IsFinal: true, Finish: true,
+			Payload: &agentv1.Event_Result{Result: &agentv1.ResultPayload{Text: "已执行，完成", Usage: &agentv1.UsageInfo{InputTokens: 120, OutputTokens: 30, ModelCalls: 2}}}},
 	}
 }
 
@@ -344,5 +375,96 @@ func TestEndToEnd_PlanSolveReplay(t *testing.T) {
 	replay := parseSSE(rrec.Body.String())
 	if !reflect.DeepEqual(replay, live) {
 		t.Fatalf("plan_solve replay != live\nlive:   %v\nreplay: %v", live, replay)
+	}
+}
+
+// M11：HITL 审批全链路——run1 挂起（approval 帧入账本可回放）→ /approvals 决议
+// 即新 run 的 SSE 流（resume metadata 贯通）→ 越权/缺参矩阵。
+func TestEndToEnd_ApprovalFlow(t *testing.T) {
+	env := newE2EEnv(t)
+
+	// run1：触发挂起。
+	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(`{"query":"这个操作需要审批","sessionId":"s-ap"}`))
+	req.Header.Set("X-User-Id", "u1")
+	rec := httptest.NewRecorder()
+	env.router.ServeHTTP(rec, req)
+	run1 := rec.Header().Get("X-Run-Id")
+	frames := parseSSE(rec.Body.String())
+	var approval map[string]any
+	for _, f := range frames {
+		if f["messageType"] == "approval_request" {
+			approval = f
+		}
+	}
+	if approval == nil {
+		t.Fatalf("run1 未见 approval_request 帧: %v", frames)
+	}
+	ap := approval["approval"].(map[string]any)
+	if ap["approvalId"] != "ap-1" || ap["toolName"] != "calculator" {
+		t.Fatalf("approval 载荷不对: %v", ap)
+	}
+	pend := ap["pendingToolCallIds"].([]any)
+	if len(pend) != 1 || pend[0] != "tc-danger" {
+		t.Fatalf("pendingToolCallIds 不对: %v", pend)
+	}
+
+	// 回放同构：approval 帧持久化可重现。
+	rr := httptest.NewRequest(http.MethodGet, "/runs/"+run1+"/events", nil)
+	rr.Header.Set("X-User-Id", "u1")
+	rrec := httptest.NewRecorder()
+	env.router.ServeHTTP(rrec, rr)
+	replayHasApproval := false
+	for _, f := range parseSSE(rrec.Body.String()) {
+		if f["messageType"] == "approval_request" {
+			replayHasApproval = true
+		}
+	}
+	if !replayHasApproval {
+		t.Fatal("回放缺 approval_request 帧（Marshal/Unmarshal 断链）")
+	}
+
+	// 决议：POST /runs/{run1}/approvals → 新 run SSE。
+	ar := httptest.NewRequest(http.MethodPost, "/runs/"+run1+"/approvals",
+		strings.NewReader(`{"approvalId":"ap-1","approved":true,"comment":"放行"}`))
+	ar.Header.Set("X-User-Id", "u1")
+	arec := httptest.NewRecorder()
+	env.router.ServeHTTP(arec, ar)
+	run2 := arec.Header().Get("X-Run-Id")
+	if run2 == "" || run2 == run1 {
+		t.Fatalf("决议应开启新 run: %q", run2)
+	}
+	got := env.cog.lastReq()
+	md := got.GetMetadata()
+	if md["approval_resume_id"] != "ap-1" || md["approval_decision"] != "approved" || md["approval_comment"] != "放行" {
+		t.Fatalf("resume metadata 未贯通: %v", md)
+	}
+	if got.GetSessionId() != "s-ap" || !strings.Contains(got.GetQuery(), "[审批] 通过") {
+		t.Fatalf("resume run 上下文不对: session=%s query=%s", got.GetSessionId(), got.GetQuery())
+	}
+	finalSeen := false
+	for _, f := range parseSSE(arec.Body.String()) {
+		if f["messageType"] == "result" && f["finish"] == true {
+			finalSeen = true
+		}
+	}
+	if !finalSeen {
+		t.Fatal("run2 未见终态 result")
+	}
+
+	// 越权：他人决议 → 403；缺 approvalId → 400。
+	bad := httptest.NewRequest(http.MethodPost, "/runs/"+run1+"/approvals",
+		strings.NewReader(`{"approvalId":"ap-1","approved":true}`))
+	bad.Header.Set("X-User-Id", "intruder")
+	brec := httptest.NewRecorder()
+	env.router.ServeHTTP(brec, bad)
+	if brec.Code != http.StatusForbidden {
+		t.Fatalf("他人决议应 403: %d", brec.Code)
+	}
+	missing := httptest.NewRequest(http.MethodPost, "/runs/"+run1+"/approvals", strings.NewReader(`{"approved":true}`))
+	missing.Header.Set("X-User-Id", "u1")
+	mrec := httptest.NewRecorder()
+	env.router.ServeHTTP(mrec, missing)
+	if mrec.Code != http.StatusBadRequest {
+		t.Fatalf("缺 approvalId 应 400: %d", mrec.Code)
 	}
 }

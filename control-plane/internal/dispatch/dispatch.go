@@ -31,9 +31,13 @@ type StartCommand struct {
 	SessionID    string
 	OwnerID      string
 	OutputFormat string // M9：输出格式（透传认知面 metadata）
-	Query        string
-	AgentType    string // "react" | "plan_solve"
-	Attachments  []Attachment
+	// M11 HITL：审批恢复三元组（乘 metadata 走既有 Run RPC；空=普通 run）。
+	ApprovalResumeID string
+	ApprovalDecision string // "approved" | "rejected"
+	ApprovalComment  string
+	Query            string
+	AgentType        string // "react" | "plan_solve"
+	Attachments      []Attachment
 }
 
 // Dispatcher 持有并发闸与运行时协作者。
@@ -100,6 +104,7 @@ func (d *Dispatcher) Run(ctx context.Context, cmd StartCommand, sink stream.Sink
 	}
 	st, err := d.client.RunAgent(ctx, cognition.RunRequest{
 		RunID: cmd.RunID, SessionID: cmd.SessionID, Query: cmd.Query, AgentType: agentType, OutputFormat: cmd.OutputFormat,
+		ApprovalResumeID: cmd.ApprovalResumeID, ApprovalDecision: cmd.ApprovalDecision, ApprovalComment: cmd.ApprovalComment,
 		MaxSteps: d.maxSteps, OwnerID: cmd.OwnerID, Attachments: atts,
 	})
 	if err != nil {

@@ -32,7 +32,11 @@ type RunRequest struct {
 	MaxSteps     int32
 	OwnerID      string // 经 proto metadata["owner_id"] 传认知面（owner 级知识库归属）
 	OutputFormat string // M9：经 metadata["output_format"] 传认知面（html/docs/ppt/table，空=不注入）
-	Attachments  []Attachment
+	// M11 HITL 审批恢复（经 metadata 三键传认知面；认知面据此走 Command(resume) 分支）。
+	ApprovalResumeID string
+	ApprovalDecision string
+	ApprovalComment  string
+	Attachments      []Attachment
 }
 
 // Stream 是一次 run 的事件流；Recv 在流结束时返回 io.EOF。
@@ -107,6 +111,11 @@ func (c *grpcClient) RunAgent(ctx context.Context, req RunRequest) (Stream, erro
 	}
 	if req.OutputFormat != "" {
 		metadata["output_format"] = req.OutputFormat
+	}
+	if req.ApprovalResumeID != "" {
+		metadata["approval_resume_id"] = req.ApprovalResumeID
+		metadata["approval_decision"] = req.ApprovalDecision
+		metadata["approval_comment"] = req.ApprovalComment
 	}
 	if len(metadata) == 0 {
 		metadata = nil

@@ -22,6 +22,8 @@ const (
 	TypePlanThought MessageType = "plan_thought"
 	TypePlan        MessageType = "plan"
 	TypeTask        MessageType = "task"
+	// M11 HITL：人工审批请求（finish 恒 false——审批=run 边界，随后的挂起 RESULT 收尾）。
+	TypeApprovalRequest MessageType = "approval_request"
 	// TypeHeartbeat 仅由网关注入，不经 gRPC、不入库、不参与重放比对。
 	TypeHeartbeat MessageType = "heartbeat"
 )
@@ -48,11 +50,12 @@ type Envelope struct {
 	Finish        bool  // 整个 run 终态；仅 result 为 true
 	Step          string
 
-	Thought *ThoughtPayload // tool_thought 与 plan_thought 共用
-	Tool    *ToolPayload    // tool_call 与 tool_result 共用
-	Result  *ResultPayload
-	Plan    *PlanPayload // plan 事件
-	Task    *TaskPayload // task 事件（单个 <sep> 子任务）
+	Thought  *ThoughtPayload // tool_thought 与 plan_thought 共用
+	Tool     *ToolPayload    // tool_call 与 tool_result 共用
+	Result   *ResultPayload
+	Plan     *PlanPayload     // plan 事件
+	Task     *TaskPayload     // task 事件（单个 <sep> 子任务）
+	Approval *ApprovalPayload // M11 approval_request 事件
 }
 
 // ThoughtPayload 承载 tool_thought / plan_thought 的思考文本。
@@ -82,7 +85,7 @@ type ToolPayload struct {
 	ToolProvider  string          `json:"toolProvider"`
 	Status        ToolStatus      `json:"status,omitempty"`
 	DispatchIndex int32           `json:"dispatchIndex"`
-	Input         json.RawMessage `json:"input,omitempty"`  // 解析后的参数对象
+	Input         json.RawMessage `json:"input,omitempty"`      // 解析后的参数对象
 	ToolResult    string          `json:"toolResult,omitempty"` // observation 文本（tool_result）
 	Summary       string          `json:"summary,omitempty"`
 	ErrorMsg      string          `json:"errorMsg,omitempty"`
@@ -93,6 +96,24 @@ type ToolPayload struct {
 type ResultPayload struct {
 	Text      string        `json:"text"`
 	Artifacts []ArtifactRef `json:"artifacts,omitempty"`
+	Usage     *UsagePayload `json:"usage,omitempty"` // M11：全 run 累计 token 用量
+}
+
+// UsagePayload：mapper 全 run 聚合的 token 用量（随终态 RESULT 到达，FinishRun 落 runs 表）。
+type UsagePayload struct {
+	InputTokens  int64 `json:"inputTokens"`
+	OutputTokens int64 `json:"outputTokens"`
+	ModelCalls   int32 `json:"modelCalls"`
+}
+
+// ApprovalPayload：人工审批请求（M11 HITL）。pending_tool_call_ids 供前端把
+// run1 中仍 RUNNING 的工具卡翻"待审批"（不发伪造终态帧）。
+type ApprovalPayload struct {
+	ApprovalID         string         `json:"approvalId"`
+	ToolName           string         `json:"toolName"`
+	Input              map[string]any `json:"input,omitempty"`
+	Reason             string         `json:"reason,omitempty"`
+	PendingToolCallIDs []string       `json:"pendingToolCallIds,omitempty"`
 }
 
 // ArtifactRef 沿用原项目 8 字段形状：artifact UI 零改、缺文件降级显式。
