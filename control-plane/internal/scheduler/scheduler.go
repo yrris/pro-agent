@@ -76,8 +76,15 @@ func (s *Scheduler) fireDue(ctx context.Context) {
 	}
 	for _, sched := range due {
 		// 同 thread 重叠护栏：上一发仍在跑（慢 run 或长审批链）→ 跳过本拍不认领。
+		// 三处稳健性（评审）：① GetRun 出错保守跳过本拍（fail-closed，宁漏一拍不叠跑）；
+		// ② 僵尸 run（进程崩溃留 RUNNING 无 FinishRun）过了 runTimeout 窗口即不再算重叠，
+		//    否则该 schedule 会被永久卡死（无 startup reconcile 时的自愈）。
 		if sched.LastRunID != "" {
-			if run, err := s.runs.GetRun(ctx, sched.LastRunID); err == nil && run.Status == store.StatusRunning {
+			run, err := s.runs.GetRun(ctx, sched.LastRunID)
+			if err != nil {
+				continue // 探测失败：保守跳过，下拍重试
+			}
+			if run.Status == store.StatusRunning && time.Since(run.CreatedAt) < s.runTimeout {
 				continue
 			}
 		}

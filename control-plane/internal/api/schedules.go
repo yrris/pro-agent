@@ -24,7 +24,6 @@ type createScheduleRequest struct {
 	Query           string `json:"query"`
 	AgentType       string `json:"agentType"`
 	IntervalSeconds int    `json:"intervalSeconds"`
-	SessionID       string `json:"sessionId"`
 }
 
 func (h *handlers) listSchedules(w http.ResponseWriter, r *http.Request) {
@@ -62,22 +61,27 @@ func (h *handlers) createSchedule(w http.ResponseWriter, r *http.Request) {
 		agentType = "react"
 	}
 	owner := ownerOf(r)
+	// cap：查询失败保守拒绝（不放行——否则 list error 时上限形同虚设，评审#12）。
 	existing, err := h.schedules.ListByOwner(r.Context(), owner)
-	if err == nil && len(existing) >= maxSchedulesPerOwner {
+	if err != nil {
+		h.log.Error("list schedules for cap failed", "err", err)
+		writeProblem(w, http.StatusInternalServerError, "internal", "创建失败")
+		return
+	}
+	if len(existing) >= maxSchedulesPerOwner {
 		writeProblem(w, http.StatusBadRequest, "too_many", "定时任务过多，请先清理")
 		return
 	}
 	id := uuid.NewString()
+	// session_id 恒服务端生成（评审#10：客户端传入不校验归属可写入他人 thread，
+	// checkpointer 按 thread_id 恢复 → 跨会话上下文注入）。不接受 body.SessionID。
 	sched := store.Schedule{
 		ScheduleID: id, OwnerID: owner,
-		SessionID:       body.SessionID,
+		SessionID:       "sched-" + id[:8], // 固定会话：thread 记忆延续 + 列表单条目
 		QueryText:       strings.TrimSpace(body.Query),
 		AgentType:       agentType,
 		IntervalSeconds: body.IntervalSeconds,
 		Enabled:         true,
-	}
-	if sched.SessionID == "" {
-		sched.SessionID = "sched-" + id[:8] // 固定会话：thread 记忆延续 + 列表单条目
 	}
 	if err := h.schedules.Create(r.Context(), sched); err != nil {
 		h.log.Error("create schedule failed", "err", err)

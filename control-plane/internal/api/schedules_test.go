@@ -56,6 +56,16 @@ func TestSchedulesEndpoints(t *testing.T) {
 	if c.OwnerID != "u1" || c.AgentType != "react" || !strings.HasPrefix(c.SessionID, "sched-") || !c.Enabled {
 		t.Fatalf("创建字段不对: %+v", c)
 	}
+	// 客户端塞 sessionId 被忽略（评审#10：防写入他人 thread）。
+	inj := httptest.NewRequest(http.MethodPost, "/schedules",
+		strings.NewReader(`{"query":"注入","intervalSeconds":3600,"sessionId":"victim-session"}`))
+	inj.Header.Set("X-User-Id", "u1")
+	irec := httptest.NewRecorder()
+	router.ServeHTTP(irec, inj)
+	if fs.created[len(fs.created)-1].SessionID == "victim-session" {
+		t.Fatal("客户端 sessionId 不应被采纳")
+	}
+
 	bad := httptest.NewRequest(http.MethodPost, "/schedules",
 		strings.NewReader(`{"query":"x","intervalSeconds":10}`))
 	bad.Header.Set("X-User-Id", "u1")
