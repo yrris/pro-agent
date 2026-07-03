@@ -176,6 +176,13 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
         mapper = EventMapper(run_id, self.tool_providers)
         kb_id = resolve_kb_id(request)
 
+        # —— M11 HITL：审批决议恢复 run（审批=run 边界；决议乘 metadata 走既有 Run RPC）——
+        req_meta = dict(getattr(request, "metadata", {}) or {})
+        if req_meta.get("approval_resume_id"):
+            async for out in self._resume_approval(request, req_meta, mapper, session_id, log):
+                yield out
+            return
+
         # —— 附件入库预步（run 前同步：read-your-writes，刚上传就能问到）——
         # 必须 to_thread：embedder/下载是同步阻塞，裸调会冻结 grpc.aio 单事件循环上的
         # 全部并发 run。整体 best-effort：入库失败不阻断 run（附件仍以注记/引用块在场）。
@@ -232,10 +239,91 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
             async for ev in graph.astream_events(state, version="v2", config=config):
                 for out in mapper.handle(ev):
                     yield out.to_proto()
+            # —— M11 HITL 挂起检测（门控三条件：流尽 + 未发终态 + react 主图）——
+            # plan 家族/异常 EOF 不探测，防误判；受保护工具 interrupt 时 GraphInterrupt
+            # 被带 checkpointer 的根图吞掉，流自然结束且无 RESULT。
+            if not mapper.finished and agent_type not in self.plan_graphs:
+                async for out in self._emit_pending_approval(graph, config, mapper, log):
+                    yield out
             log.info("run done")
         except asyncio.CancelledError:
             log.info("run cancelled")
             raise
         except Exception as exc:  # noqa: BLE001 — 节点异常兜底，保证流干净关闭
             log.exception("run failed")
+            yield mapper.error_result(str(exc)).to_proto()
+
+    async def _emit_pending_approval(self, graph, config, mapper, log):
+        """流尽未终态时探测 pending interrupt：发 approval_request + 挂起 RESULT 收尾。"""
+        from cognition.approval import first_interrupt_payload
+
+        try:
+            snapshot = await graph.aget_state(config)
+        except Exception as exc:  # noqa: BLE001 — 探测失败按普通未终态处理
+            log.warning("interrupt probe failed: %s", exc)
+            return
+        payload = first_interrupt_payload(snapshot)
+        if payload is None:
+            return
+        log.info("run paused for approval %s (tool=%s)", payload.get("approval_id"), payload.get("tool"))
+        yield mapper.approval_request(payload).to_proto()
+        yield mapper.plain_result(
+            f"⏸ 已挂起等待人工审批：{payload.get('tool', '')}。批准或拒绝后将自动继续。"
+        ).to_proto()
+
+    async def _resume_approval(self, request, req_meta, mapper, session_id, log):
+        """审批决议恢复：校验 pending interrupt 匹配 → Command(resume) 续图 → 继续检测链。
+
+        interrupt 态在 checkpoint（thread=session）持久——跨断连/重启/隔夜均可恢复；
+        决议 resume 值恒为字符串（dict 会被 langgraph 解释为 interrupt-id 映射）。
+        """
+        from langgraph.types import Command
+
+        from cognition.approval import first_interrupt_payload, make_decision
+
+        graph = self.react_graph  # 受保护工具仅 react 主图（见 approval.py 模块注释）
+        resume_id = req_meta.get("approval_resume_id", "")
+        approved = req_meta.get("approval_decision", "") == "approved"
+        comment = req_meta.get("approval_comment", "")
+        config = {
+            "configurable": {"thread_id": session_id},
+            "recursion_limit": 2 * int(self.settings.max_steps) + 5,
+            "metadata": {
+                "request_id": mapper.run_id,
+                "run_id": mapper.run_id,
+                "session_id": session_id,
+                "kb_id": resolve_kb_id(request),
+                "agent_type": "react",
+            },
+        }
+        try:
+            snapshot = await graph.aget_state(config)
+        except Exception as exc:  # noqa: BLE001
+            yield mapper.error_result(f"审批恢复失败: {exc}").to_proto()
+            return
+        payload = first_interrupt_payload(snapshot)
+        if payload is None or payload.get("approval_id") != resume_id:
+            # 已被处理/会话已继续（新消息重启图丢弃 pending task）/伪造 id → 优雅收尾。
+            log.info("no matching pending approval (want=%s)", resume_id)
+            yield mapper.plain_result("没有待审批的请求（可能已被处理，或会话已继续对话）。").to_proto()
+            return
+        verdict = "已批准 ✅" if approved else "已拒绝 ⛔"
+        note = f"人工审批{verdict}：{payload.get('tool', '')}" + (f"（备注：{comment}）" if comment else "")
+        yield mapper.info_event(note).to_proto()
+        log.info("resuming after approval %s approved=%s", resume_id, approved)
+        try:
+            async for ev in graph.astream_events(
+                Command(resume=make_decision(approved, comment)), version="v2", config=config
+            ):
+                for out in mapper.handle(ev):
+                    yield out.to_proto()
+            # 恢复后可能再次撞审批门（链式审批自然组合）。
+            if not mapper.finished:
+                async for out in self._emit_pending_approval(graph, config, mapper, log):
+                    yield out
+        except asyncio.CancelledError:
+            log.info("resume cancelled")
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.exception("resume failed")
             yield mapper.error_result(str(exc)).to_proto()

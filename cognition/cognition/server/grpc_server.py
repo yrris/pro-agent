@@ -36,6 +36,15 @@ async def serve(settings: Settings | None = None) -> None:
     # 装配期聚合 local + MCP + Skill 工具；provider_map 注入事件映射，tool_closers 停机时关闭。
     tools, provider_map, tool_closers = await build_tool_suite(settings)
 
+    # —— M11 HITL：受保护工具包装（仅 react 主图用 react_tools；plan 家族用原 tools——
+    # executor 分支 except Exception 会吞 GraphInterrupt，审批门在 plan 模式不生效）。
+    react_tools = tools
+    if settings.approval_tools:
+        from cognition.approval import wrap_with_approval
+
+        react_tools = wrap_with_approval(tools, settings.approval_tools, reason=settings.approval_reason)
+        logger.info("approval gate on tools: %s", settings.approval_tools)
+
     if settings.fake_model:
         from cognition.providers.fake import (
             build_fake_executor_model,
@@ -44,13 +53,13 @@ async def serve(settings: Settings | None = None) -> None:
         )
 
         logger.info("using scripted fake model (no LLM key)")
-        react_model = build_fake_model().bind_tools(tools)
+        react_model = build_fake_model().bind_tools(react_tools)
         planner_model = build_fake_plan_model()
         executor_model = build_fake_executor_model().bind_tools(tools)
     else:
         from cognition.graphs.plan_execute import planning_tool
 
-        react_model = select_model("executor", tools=tools, settings=settings)
+        react_model = select_model("executor", tools=react_tools, settings=settings)
         # planner 必须绑定 planning 工具——否则真实模型只能把计划 JSON 写进正文，
         # 解析失败即永远退化"单步计划=原句"（fake planner 直接产 tool_calls 掩盖过此缺陷）。
         planner_model = select_model("planner", tools=[planning_tool], settings=settings)
@@ -61,6 +70,13 @@ async def serve(settings: Settings | None = None) -> None:
     if settings.pg_dsn:
         checkpointer, aclose = await build_checkpointer(settings.pg_dsn)
         logger.info("postgres checkpointer enabled")
+    if settings.approval_tools and checkpointer is None:
+        # interrupt 依赖 checkpointer；fake/无 PG 场景用内存兜底（同进程恢复，够 e2e）。
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        checkpointer = InMemorySaver()
+        logger.info("approval enabled without PG: using InMemorySaver (same-process resume only)")
+
 
     # 会话短期记忆：think 入模型前做「token 预算·近期优先」投影（超阈值折叠旧轮为摘要）。
     history_policy = HistoryPolicy(
@@ -86,7 +102,7 @@ async def serve(settings: Settings | None = None) -> None:
     logger.info("attachments: vision=%s(provider=%s) auto_ingest=%s", vision, exec_provider, bool(ingest_fn))
 
     react_graph = build_react_graph(
-        react_model, tools, checkpointer=checkpointer,
+        react_model, react_tools, checkpointer=checkpointer,
         max_steps=settings.max_steps, history_policy=history_policy, expander=expander,
         format_prompts=settings.output_format_prompts,
     )

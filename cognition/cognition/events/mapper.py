@@ -400,8 +400,15 @@ class EventMapper:
         此前 mapper 忽略 on_tool_error：异常路径下 tool_call 永远停在 running、无
         tool_result。data.input 是 ToolNode 传入的完整 tool_call dict（含 id/name）；
         取不到 id 时若恰有一个 running 项则兜底认领。
+
+        例外（M11 HITL）：GraphInterrupt 不是错误——审批门挂起经此形态冒泡。跳过
+        （不发 FAILED、不弹 _running），卡保持 RUNNING，随后的 approval_request
+        事件携带 pending_tool_call_ids 让前端翻"待审批"。
         """
         data = event.get("data") or {}
+        err = data.get("error")
+        if err is not None and "Interrupt" in type(err).__name__:  # GraphInterrupt 家族
+            return []
         inp = data.get("input")
         raw = ""
         name = str(event.get("name") or "")
@@ -497,6 +504,55 @@ class EventMapper:
     def error_result(self, message: str) -> Event:
         """节点异常时的终态 result（把错误放进 text，关闭 run）。"""
         return self._make_result(f"运行出错: {message}")
+
+    # —— M11 HITL 公开 API（servicer 在图流结束后按需调用；seq 由同一计数器延续）——
+
+    @property
+    def finished(self) -> bool:
+        """本 run 是否已发过终态 RESULT（interrupt 检测的门控之一）。"""
+        return self._finished
+
+    @property
+    def running_tool_call_ids(self) -> list[str]:
+        """仍处 RUNNING 的工具卡 id（挂起时随审批事件下发，前端翻"待审批"防孤儿转圈）。"""
+        return list(self._running.keys())
+
+    def approval_request(self, payload: dict[str, Any]) -> Event:
+        """把 interrupt 载荷映射为 approval_request 事件（is_final=True，finish 恒 False）。"""
+        from cognition.events.schema import ApprovalPayload
+
+        approval_id = str(payload.get("approval_id", "") or "ap")
+        return Event(
+            seq=self._next_seq(),
+            run_id=self.run_id,
+            message_id=f"{self.run_id}:approval:{approval_id}",
+            type=EventType.APPROVAL_REQUEST,
+            is_final=True,
+            step="approval",
+            approval=ApprovalPayload(
+                approval_id=approval_id,
+                tool_name=str(payload.get("tool", "") or ""),
+                input=dict(payload.get("input", {}) or {}),
+                reason=str(payload.get("reason", "") or ""),
+                pending_tool_call_ids=self.running_tool_call_ids,
+            ),
+        )
+
+    def info_event(self, text: str) -> Event:
+        """人类可读注记（决议记录等）：TOOL_THOUGHT 形态入账本，回放可见决策链。"""
+        return Event(
+            seq=self._next_seq(),
+            run_id=self.run_id,
+            message_id=f"{self.run_id}:info:{self._seq}",
+            type=EventType.TOOL_THOUGHT,
+            is_final=True,
+            step="info",
+            tool_thought=ThoughtPayload(text=text),
+        )
+
+    def plain_result(self, text: str) -> Event:
+        """servicer 手工收尾用的终态 RESULT（挂起提示/无待审批等）。"""
+        return self._make_result(text)
 
 
 def _coerce_artifacts(artifact: Any) -> list[ArtifactRef]:

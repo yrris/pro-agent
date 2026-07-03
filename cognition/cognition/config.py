@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     planner_max_steps: int = Field(default=5, ge=1)
     # 深度研究模式（deep_research）的外层轮次上限：研究需要更多"检索-验证-推进"轮。
     research_max_steps: int = Field(default=8, ge=1)
+
+    # —— HITL 人工审批（M11）——
+    # 受保护工具名列表（COGNITION_APPROVAL_TOOLS='["script_runner"]'）；默认空=关闭。
+    # 仅 react 主图生效（plan 分支吞 GraphInterrupt，见 approval.py 模块注释）。
+    # 注意重放语义：同批次其它副作用工具会随 resume 重执行——按需谨慎启用。
+    approval_tools: list[str] = Field(default_factory=list)
+    approval_reason: str = Field(default="该操作被列为高危，需人工确认后执行")
     # 并行子任务宽度上限（镜像 maxParallelTasks，默认 2）。
     max_parallel_tasks: int = Field(default=2, ge=1)
     # 单个并行分支（executor 子图）的超时秒数。默认 300：思考模型（reasoning）输出
