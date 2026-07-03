@@ -307,6 +307,18 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
             log.info("no matching pending approval (want=%s)", resume_id)
             yield mapper.plain_result("没有待审批的请求（可能已被处理，或会话已继续对话）。").to_proto()
             return
+        # 恢复 run 的 config 必须重建挂起时的 per-run 上下文，否则 ToolNode 重放期
+        # script_runner 读不到附件白名单（数据分析审批必失败）。attachments 从 checkpoint
+        # 的 state.product_files 恢复（挂起前已入 state）；决议乘 metadata 走既有 Run RPC。
+        product = (getattr(snapshot, "values", None) or {}).get("product_files") or []
+        if product:
+            import json as _json
+
+            from cognition.attachments import normalize_attachments as _norm
+
+            config["metadata"]["attachments"] = _json.dumps(_norm(list(product)), ensure_ascii=False)
+        # output_format 走 config 不进 checkpoint（设计如此）→ 恢复轮无法还原，
+        # 最终答复回落自由格式（已知限制，审批场景罕见带格式）。
         verdict = "已批准 ✅" if approved else "已拒绝 ⛔"
         note = f"人工审批{verdict}：{payload.get('tool', '')}" + (f"（备注：{comment}）" if comment else "")
         yield mapper.info_event(note).to_proto()

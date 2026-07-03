@@ -39,6 +39,22 @@ from cognition.events.schema import (
 from cognition.providers.reasoning import extract_reasoning_delta, extract_text_delta
 
 
+def _is_graph_interrupt(err: Any) -> bool:
+    """精确识别 LangGraph 的中断冒泡（GraphBubbleUp/GraphInterrupt 家族）。
+
+    按类型判定而非子串——子串 "Interrupt" 会误伤 duckdb.InterruptException 等
+    真实工具异常（那些应正常收口为 FAILED，不能被当成审批挂起吞掉）。
+    """
+    if err is None:
+        return False
+    try:
+        from langgraph.errors import GraphBubbleUp
+
+        return isinstance(err, GraphBubbleUp)
+    except Exception:  # noqa: BLE001 — langgraph 缺失/版本差异时保守回退
+        return type(err).__name__ == "GraphInterrupt"
+
+
 def _thought_delta(chunk: Any) -> str:
     """thought 流增量 = 思考链（reasoning_content/thinking 块）+ 可见文本。
 
@@ -421,8 +437,7 @@ class EventMapper:
         事件携带 pending_tool_call_ids 让前端翻"待审批"。
         """
         data = event.get("data") or {}
-        err = data.get("error")
-        if err is not None and "Interrupt" in type(err).__name__:  # GraphInterrupt 家族
+        if _is_graph_interrupt(data.get("error")):  # 审批门挂起，不是错误
             return []
         inp = data.get("input")
         raw = ""

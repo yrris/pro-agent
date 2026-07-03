@@ -21,6 +21,7 @@ import json
 import uuid
 from typing import Any, Optional, Sequence
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.types import interrupt
 
@@ -97,7 +98,10 @@ def _wrap_one(tool: BaseTool, reason: str) -> BaseTool:
         text = f"已被人工拒绝{('：' + comment) if comment else ''}，未执行 {name}。"
         return (text, None) if content_and_artifact else text
 
-    async def gate(**kwargs: Any) -> Any:
+    # config 必须显式声明（带 RunnableConfig 注解）——否则 StructuredTool._arun 不会注入
+    # 它，原工具拿到 config=None：script_runner 读不到附件白名单、knowledge_search 丢
+    # kb 安全保证、write_report 的 run_id 错乱致产物 404。注入的 config 需原样转发。
+    async def gate(config: RunnableConfig = None, **kwargs: Any) -> Any:  # type: ignore[assignment]
         # interrupt 之前禁止任何副作用（重放语义：本段代码 resume 时重跑）。
         decision = interrupt(
             {
@@ -110,11 +114,11 @@ def _wrap_one(tool: BaseTool, reason: str) -> BaseTool:
         approved, comment = parse_decision(decision)
         if not approved:
             return _reject_value(comment)
+        forwarded = {**kwargs, "config": config}  # 按原函数签名过滤（不收 config 者自动剔除）
         if orig_coro is not None:
-            return await orig_coro(**_accepted_kwargs(orig_coro, kwargs))
+            return await orig_coro(**_accepted_kwargs(orig_coro, forwarded))
         if orig_func is not None:
-            fn_kwargs = _accepted_kwargs(orig_func, kwargs)
-            return await asyncio.to_thread(orig_func, **fn_kwargs)
+            return await asyncio.to_thread(orig_func, **_accepted_kwargs(orig_func, forwarded))
         raise RuntimeError(f"tool {name} has no callable")  # 结构性错误，不该发生
 
     return tool.model_copy(update={"coroutine": gate, "func": None})

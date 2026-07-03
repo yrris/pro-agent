@@ -10,6 +10,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 
 from cognition._genproto import agent_pb2
@@ -81,6 +82,16 @@ def _req(run_id: str, session: str, query: str = "算一下", metadata: dict | N
 
 async def _drain(servicer, request):
     return [p async for p in servicer.Run(request, None)]
+
+
+# 模块级（不受 `from __future__ import annotations` 的字符串化影响，StructuredTool 可求值注解）。
+_PEEK_SEEN: dict = {}
+
+
+def _peek_config(x: str, config: RunnableConfig = None) -> str:  # type: ignore[assignment]
+    """记录注入的 config.metadata.run_id（证实审批门转发 config）。"""
+    _PEEK_SEEN["run_id"] = (config or {}).get("metadata", {}).get("run_id")
+    return f"ok:{x}"
 
 
 async def test_pause_then_approve_full_chain():
@@ -198,3 +209,48 @@ def test_usage_absent_when_no_model_calls():
     ev = EventMapper("run-z").plain_result("done")
     assert ev.result.usage is None
     assert ev.to_proto().result.usage.model_calls == 0  # proto 零值（旧端等价）
+
+
+def test_gate_forwards_config_to_config_taking_tool():
+    """评审#1：审批门必须转发 RunnableConfig——否则 script_runner 读不到附件白名单、
+    write_report 的 run_id 错乱致产物 404。用一个读 config 的假工具证实注入贯通。"""
+    import asyncio as _asyncio
+
+    from langchain_core.tools import StructuredTool
+    from langgraph.types import Command as _Command
+
+    tool = StructuredTool.from_function(func=_peek_config, name="peek")
+    wrapped = wrap_with_approval([tool], ["peek"])[0]
+    _PEEK_SEEN.clear()
+
+    async def run():
+        model = ScriptedChatModel(responses=[
+            AIMessage(content="", tool_calls=[{"name": "peek", "args": {"x": "hi"}, "id": "t1", "type": "tool_call"}]),
+            AIMessage(content="done"),
+        ])
+        graph = build_react_graph(model, [wrapped], checkpointer=MemorySaver(), max_steps=3)
+        cfg = {"configurable": {"thread_id": "cfgtest"}, "metadata": {"run_id": "RUN-XYZ"}}
+        async for _ in graph.astream_events({"messages": []}, version="v2", config=cfg):
+            pass
+        async for _ in graph.astream_events(_Command(resume="approved"), version="v2", config=cfg):
+            pass
+
+    _asyncio.run(run())
+    assert _PEEK_SEEN.get("run_id") == "RUN-XYZ"  # config 贯通到被审批工具
+
+
+def test_graph_interrupt_detection_precise():
+    """评审#15：按类型识别中断，不误伤子串含 Interrupt 的真实工具异常。"""
+    from cognition.events.mapper import _is_graph_interrupt
+
+    class DuckDBInterruptException(Exception):
+        pass
+
+    assert _is_graph_interrupt(DuckDBInterruptException("x")) is False
+    assert _is_graph_interrupt(None) is False
+    try:
+        from langgraph.errors import GraphInterrupt
+
+        assert _is_graph_interrupt(GraphInterrupt(())) is True
+    except Exception:
+        pass
