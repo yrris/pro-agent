@@ -176,3 +176,42 @@ def test_data_analysis_skill_real_duckdb(tmp_path):
     # 非 SELECT 拒绝
     msg3 = asyncio.run(run({"files": ["sales.csv"], "mode": "query", "sql": "DROP TABLE sales"}))
     assert "失败" in msg3.content
+
+
+def test_chart_and_ppt_skills_produce_artifacts():
+    """B4：chart 双产物 + pptx 非空 + md→html（经 LocalRunner 真实执行）。"""
+    import pytest
+
+    pytest.importorskip("matplotlib")
+    pytest.importorskip("pptx")
+    from pathlib import Path as _P
+
+    skill_dir = _P(__file__).resolve().parents[1] / "runtime" / "skills"
+    reg = SkillRegistry()
+    reg.refresh([str(skill_dir)])
+    tools = {t.name: t for t in build_skill_tools(reg, LocalSubprocessScriptRunner())}
+
+    async def run(skill, script, args):
+        return await tools["script_runner"].ainvoke(
+            {"args": {"skill": skill, "script": script, "script_args": args},
+             "id": f"{skill}-1", "name": "script_runner", "type": "tool_call"},
+            config={"metadata": {"request_id": "r1"}},
+        )
+
+    # chart：双产物（吃 B1 多产物修复）。
+    msg = asyncio.run(run("chart-visualization", "render.py",
+                          {"type": "bar", "title": "销售", "labels": ["水果", "蔬菜"],
+                           "series": [{"name": "金额", "data": [30, 5]}]}))
+    names = {a["file_name"] for a in (msg.artifact or [])}
+    assert names == {"chart.png", "echarts-option.json"}, msg.content
+
+    # pptx：文件非空。
+    msg2 = asyncio.run(run("ppt-generation", "build_pptx.py",
+                           {"title": "汇报", "slides": [{"title": "P1", "bullets": ["a", "b"]}]}))
+    arts2 = {a["file_name"]: a for a in (msg2.artifact or [])}
+    assert "presentation.pptx" in arts2 and arts2["presentation.pptx"]["size"] > 1000
+
+    # md→html。
+    msg3 = asyncio.run(run("ppt-generation", "md_to_html.py",
+                           {"title": "报告", "markdown": "# 一\n\n- 点1\n- 点2\n\n**加粗**"}))
+    assert any(a["file_name"] == "document.html" for a in (msg3.artifact or []))
