@@ -1,5 +1,5 @@
-import { memo } from "react";
-import { Paperclip } from "lucide-react";
+import { memo, useState } from "react";
+import { Check, Copy, Paperclip } from "lucide-react";
 import type { AttachmentRef } from "../lib/api/client";
 import type { PlanView as PlanViewT, RunState, ToolCallView } from "../lib/sse/frameTypes";
 import { Collapsible, Markdown, ProviderTag, ToolStatusBadge } from "./common";
@@ -17,11 +17,22 @@ function UserBubble({ text }: { text: string }) {
   );
 }
 
-function ThoughtBlock({ kind, text }: { kind: "tool" | "plan"; text: string }) {
+function ThoughtBlock({ kind, text, running }: { kind: "tool" | "plan"; text: string; running?: boolean }) {
   if (!text.trim()) return null;
   const label = kind === "plan" ? "规划思考" : "思考";
+  // 过程可见但不喧宾夺主：流式期间展开跟读，run 结束折叠为一行摘要
+  //（折叠/展开由 MessageList 的 key 带 running 标志触发重挂载实现）。
+  const excerpt = text.trim().split("\n")[0].slice(0, 42);
   return (
-    <Collapsible title={<span className="text-stone-400">💭 {label}</span>} defaultOpen>
+    <Collapsible
+      title={
+        <span className="min-w-0 text-stone-400">
+          💭 {label}
+          {!running && <span className="ml-1 text-xs text-stone-500">· {excerpt}…</span>}
+        </span>
+      }
+      defaultOpen={!!running}
+    >
       <div className="whitespace-pre-wrap text-stone-300">{text}</div>
     </Collapsible>
   );
@@ -101,10 +112,30 @@ function ToolCard({ call, resultText }: { call: ToolCallView; resultText?: strin
 }
 
 function Conclusion({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* 剪贴板被拒绝（非 https 等）：静默 */
+    }
+  };
   return (
     <Card className="gap-0 rounded-2xl rounded-bl-sm border-emerald-500/25 bg-emerald-500/[0.05] px-4 py-3">
       <div className="mb-1 text-xs text-emerald-300">结论</div>
       <Markdown>{text || "（空）"}</Markdown>
+      <div className="mt-2 flex justify-end border-t border-white/5 pt-1.5">
+        <button
+          onClick={() => void copy()}
+          title="复制结论"
+          className="flex items-center gap-1 text-xs text-stone-500 transition-colors hover:text-foreground"
+        >
+          {copied ? <Check className="size-3.5 text-emerald-400" /> : <Copy className="size-3.5" />}
+          {copied ? "已复制" : "复制"}
+        </button>
+      </div>
     </Card>
   );
 }
@@ -135,10 +166,12 @@ export const MessageList = memo(function MessageList({
   state,
   query,
   attachments,
+  running,
 }: {
   state: RunState;
   query?: string;
   attachments?: AttachmentRef[];
+  running?: boolean;
 }) {
   const resultByCall = new Map(state.toolResults.map((r) => [r.toolCallId, r.text]));
   return (
@@ -150,7 +183,8 @@ export const MessageList = memo(function MessageList({
         switch (entry.kind) {
           case "thought": {
             const t = state.thoughts[entry.key];
-            return t ? <ThoughtBlock key={k} kind={t.kind} text={t.text} /> : null;
+            // key 带 running：run 结束时重挂载 → 未受控 Collapsible 从展开态收拢为摘要行。
+            return t ? <ThoughtBlock key={`${k}:${running ? "r" : "d"}`} kind={t.kind} text={t.text} running={running} /> : null;
           }
           case "plan": {
             const round = state.plannerRounds.find((r) => (r.plannerRoundId ?? "plan") === entry.key) ?? state.plan;
@@ -160,7 +194,14 @@ export const MessageList = memo(function MessageList({
             return <TaskChip key={k} text={state.tasks[Number(entry.key)]?.text ?? ""} />;
           case "toolCall": {
             const call = state.toolCalls[entry.key];
-            return call ? <ToolCard key={k} call={call} resultText={resultByCall.get(call.toolCallId)} /> : null;
+            // key 带成功标志：工具成功那一帧重挂载 → 自动折叠（运行中/失败保持展开）。
+            return call ? (
+              <ToolCard
+                key={`${k}:${call.status === "success" ? "s" : "r"}`}
+                call={call}
+                resultText={resultByCall.get(call.toolCallId)}
+              />
+            ) : null;
           }
           case "result":
             return state.result ? <Conclusion key={k} text={state.result.text} /> : null;

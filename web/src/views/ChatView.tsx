@@ -323,7 +323,7 @@ export function ChatView({
                   )}
                 </div>
               ))}
-              {live && <MessageList state={live.state} query={live.query} attachments={live.attachments} />}
+              {live && <MessageList state={live.state} query={live.query} attachments={live.attachments} running={status === "running"} />}
               {loadingHistory && (
                 <div className="mt-3 space-y-2">
                   <div className="text-sm text-stone-500 pulse-dot">● 载入历史会话…</div>
