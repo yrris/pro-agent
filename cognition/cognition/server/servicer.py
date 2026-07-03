@@ -146,6 +146,7 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
 
         graph, state, recursion = self._build(request, ingested)
         # kb_id 单点解析进 metadata：knowledge_search（config 优先）与附件入库共用；
+        # attachments 白名单供 script_runner 的 input_files 按文件名解析（M9）；
         # plan_solve 的 executor 分支经 child_config metadata spread 自动透传。
         metadata = {
             "request_id": run_id,
@@ -153,6 +154,12 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
             "session_id": session_id,
             "kb_id": kb_id,
         }
+        if attachments:
+            import json as _json
+
+            from cognition.attachments import normalize_attachments as _norm
+
+            metadata["attachments"] = _json.dumps(_norm(attachments), ensure_ascii=False)
         config = {
             "configurable": {"thread_id": session_id},
             "recursion_limit": recursion,

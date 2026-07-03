@@ -18,6 +18,7 @@ from typing import Optional
 from cognition.config import Settings
 from cognition.skills.runner.base import ScriptResult
 from cognition.skills.runner.request import ScriptRunRequest, scan_artifacts
+from cognition.skills.runner.staging import stage_inputs
 
 logger = logging.getLogger(__name__)
 
@@ -25,15 +26,38 @@ logger = logging.getLogger(__name__)
 class LocalSubprocessScriptRunner:
     """在宿主子进程执行脚本（无隔离）。生产用 DockerScriptRunner。"""
 
-    def __init__(self, settings: Optional[Settings] = None) -> None:
+    def __init__(self, settings: Optional[Settings] = None, *, downloader=None) -> None:
         self._settings = settings
+        self._downloader = downloader  # 测试注入；缺省惰性建 MinioDownloader
+
+    def _get_downloader(self):
+        if self._downloader is None:
+            from cognition.attachments import MinioDownloader
+
+            self._downloader = MinioDownloader(self._settings)
+        return self._downloader
 
     async def run(self, req: ScriptRunRequest, *, run_id: str, tool_call_id: str) -> ScriptResult:
         out_dir = tempfile.mkdtemp(prefix="skill-out-")
         env = {**os.environ, "SKILL_OUTPUT_DIR": out_dir, "SKILL_ARGS": req.cmd[-1]}
+        if req.input_files:
+            in_dir = tempfile.mkdtemp(prefix="skill-in-")
+            try:
+                # to_thread：MinIO 下载是阻塞 I/O，不得占 grpc.aio 事件循环。
+                await asyncio.to_thread(stage_inputs, req.input_files, self._get_downloader(), in_dir)
+            except Exception as exc:  # noqa: BLE001 — 输入落地失败=确定性前置失败
+                return ScriptResult(exit_code=126, stdout="", stderr=f"输入文件下载失败: {exc}")
+            env["SKILL_INPUT_DIR"] = in_dir
+        cmd = list(req.cmd)
+        # local 专属：.py 用当前 venv 解释器（裸 python3 取自 PATH，技能依赖组装在 venv 里
+        # 会失效）。req.cmd 保持 python3 不动——docker 路径按容器内解释器执行。
+        if cmd[0] == "python3":
+            import sys
+
+            cmd[0] = sys.executable
         try:
             proc = await asyncio.create_subprocess_exec(
-                *req.cmd,
+                *cmd,
                 cwd=req.workdir,
                 env=env,
                 stdout=asyncio.subprocess.PIPE,

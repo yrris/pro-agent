@@ -36,6 +36,9 @@ class ScriptRunRequest:
     timeout_s: float
     workdir: str           # 宿主上 skill 目录（挂载源）
     cmd: tuple[str, ...]    # 容器内命令行：interpreter scripts/<script> <json-args>
+    # M9：脚本输入文件 (resource_key, dest_name)——runner exec 前从 MinIO 预下载到
+    # $SKILL_INPUT_DIR（docker: -v in:/in:ro）。加性默认空，既有调用零影响。
+    input_files: tuple[tuple[str, str], ...] = ()
 
 
 def _validate_script_name(script: str) -> str:
@@ -58,6 +61,7 @@ def build_request(
     *,
     default_timeout: float,
     requested_timeout: float | None = None,
+    input_files: list[tuple[str, str]] | None = None,
 ) -> ScriptRunRequest:
     """构造脚本运行请求。超时统一 `max(requested+grace, 下限)`；args 作单 JSON 形参。"""
     norm = _validate_script_name(script)
@@ -73,7 +77,50 @@ def build_request(
         timeout_s=timeout_s,
         workdir=str(skill.base_path),
         cmd=(interpreter, rel, payload),
+        input_files=tuple(input_files or ()),
     )
+
+
+def _sanitize_dest_name(name: str) -> str:
+    """输入文件的落地名：只取 basename（上传名可能带路径字符），空则回退 input。"""
+    base = posixpath.basename((name or "").replace("\\", "/")).strip()
+    return base or "input"
+
+
+def resolve_input_files(
+    requested_names: list[str], attachments: list[dict]
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """按文件名从**本 run 附件白名单**解析 (resource_key, dest_name)（纯函数）。
+
+    安全设计：LLM 只能引用文件名，映射表来自本 run 的 attachments（其 key 已过 Go
+    归属闸）——模型无法让 runner 去拉任意对象。返回 (resolved, problems)：
+    problems 为人类可读错误行（不存在/重名歧义），调用方作为工具文本返回让模型自纠。
+    """
+    by_name: dict[str, list[str]] = {}
+    for a in attachments or []:
+        fn = str(a.get("file_name", "") or "")
+        rk = str(a.get("resource_key", "") or "")
+        if fn and rk:
+            by_name.setdefault(fn, []).append(rk)
+
+    resolved: list[tuple[str, str]] = []
+    problems: list[str] = []
+    seen_dest: set[str] = set()
+    for name in requested_names or []:
+        keys = by_name.get(name)
+        if not keys:
+            problems.append(f"附件「{name}」不存在。本次可用附件: {sorted(by_name) or '（无）'}")
+            continue
+        if len(keys) > 1:
+            problems.append(f"附件名「{name}」有 {len(keys)} 个同名文件，无法唯一定位，请让用户重传改名。")
+            continue
+        dest = _sanitize_dest_name(name)
+        if dest in seen_dest:
+            problems.append(f"输入文件落地名冲突: {dest}")
+            continue
+        seen_dest.add(dest)
+        resolved.append((keys[0], dest))
+    return resolved, problems
 
 
 def artifact_ref(*, file_name: str, size: int, run_id: str, tool_call_id: str) -> dict:

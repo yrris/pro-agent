@@ -18,6 +18,7 @@ from typing import Optional
 from cognition.config import Settings
 from cognition.skills.runner.base import ScriptResult
 from cognition.skills.runner.request import ScriptRunRequest, scan_artifacts
+from cognition.skills.runner.staging import stage_inputs
 
 logger = logging.getLogger(__name__)
 
@@ -40,27 +41,49 @@ class DockerScriptRunner:
         self._cpus = cpus
         self._pids_limit = pids_limit
 
-    def _docker_argv(self, req: ScriptRunRequest, out_dir: str) -> list[str]:
+    def _get_downloader(self):
+        if getattr(self, "_downloader", None) is None:
+            from cognition.attachments import MinioDownloader
+
+            self._downloader = MinioDownloader(self._settings)
+        return self._downloader
+
+    def _docker_argv(self, req: ScriptRunRequest, out_dir: str, in_dir: str | None = None) -> list[str]:
         # 容器内命令：把 req.cmd 的相对脚本路径挂到 /skill 下执行；产物写 /out。
+        # matplotlib 等需要可写缓存目录 → --tmpfs /tmp + MPLCONFIGDIR（--read-only 下唯一可写处）。
         interpreter, rel_script, json_args = req.cmd
-        return [
+        argv = [
             "docker", "run", "--rm",
             "--network", "none",
             "--memory", self._memory,
             "--cpus", self._cpus,
             "--pids-limit", str(self._pids_limit),
             "--read-only",
+            "--tmpfs", "/tmp",
+            "-e", "MPLCONFIGDIR=/tmp",
             "-v", f"{req.workdir}:/skill:ro",
             "-v", f"{out_dir}:/out:rw",
             "-e", "SKILL_OUTPUT_DIR=/out",
+        ]
+        if in_dir is not None:
+            argv += ["-v", f"{in_dir}:/in:ro", "-e", "SKILL_INPUT_DIR=/in"]
+        argv += [
             "-w", "/skill",
             self._image,
             interpreter, f"/skill/{rel_script}", json_args,
         ]
+        return argv
 
     async def run(self, req: ScriptRunRequest, *, run_id: str, tool_call_id: str) -> ScriptResult:
         out_dir = tempfile.mkdtemp(prefix="skill-out-")
-        argv = self._docker_argv(req, out_dir)
+        in_dir: str | None = None
+        if req.input_files:
+            in_dir = tempfile.mkdtemp(prefix="skill-in-")
+            try:
+                await asyncio.to_thread(stage_inputs, req.input_files, self._get_downloader(), in_dir)
+            except Exception as exc:  # noqa: BLE001 — 输入落地失败=确定性前置失败
+                return ScriptResult(exit_code=126, stdout="", stderr=f"输入文件下载失败: {exc}")
+        argv = self._docker_argv(req, out_dir, in_dir)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE

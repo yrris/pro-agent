@@ -16,17 +16,34 @@ from typing import Annotated, Optional
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, InjectedToolCallId, StructuredTool
 
+import json as _json
+
 from cognition.config import Settings
 from cognition.skills import SkillSandboxError
 from cognition.skills.disclosure import body, catalog
 from cognition.skills.registry import SkillRegistry
 from cognition.skills.runner.base import ScriptRunner
-from cognition.skills.runner.request import build_request
+from cognition.skills.runner.request import build_request, resolve_input_files
 from cognition.skills.sandbox import assert_path_allowed
 from cognition.tools.report import _run_id_from_config
 
 _SKILL_PROVIDER = "skill"
 _MAX_READ_CHARS = 20000
+
+
+def _attachments_from_config(config: RunnableConfig) -> list[dict]:
+    """从 config.metadata 取本 run 的附件白名单（servicer 以 JSON 字符串注入）。"""
+    if not config:
+        return []
+    meta = config.get("metadata") or {}
+    raw = meta.get("attachments")
+    if not raw:
+        return []
+    try:
+        parsed = _json.loads(raw) if isinstance(raw, str) else raw
+        return list(parsed) if isinstance(parsed, list) else []
+    except Exception:  # noqa: BLE001 — 白名单解析失败按无附件处理
+        return []
 
 
 def build_skill_tools(
@@ -107,18 +124,30 @@ def build_skill_tools(
         skill: str,
         script: str,
         script_args: Optional[dict] = None,
+        input_files: Optional[list[str]] = None,
         timeout: Optional[float] = None,
         tool_call_id: Annotated[str, InjectedToolCallId] = "",
         config: RunnableConfig = None,  # type: ignore[assignment]
-    ) -> tuple[str, Optional[dict]]:
+    ) -> tuple[str, Optional[list]]:
         """执行某个 skill 的脚本（容器隔离），返回输出摘要并登记产物。
 
-        script_args 会作为单个 JSON 参数传给脚本。
+        script_args 会作为单个 JSON 参数传给脚本。input_files 填**用户上传附件的文件名**
+        （本轮消息注记中列出的），脚本可在 $SKILL_INPUT_DIR 下按同名读取。
         """
         sk = registry.get(skill)
         if sk is None:
             return (f"未找到 skill「{skill}」。", None)
-        req = build_request(sk, script, script_args, default_timeout=default_timeout, requested_timeout=timeout)
+        # 安全：input_files 只按文件名在本 run 附件白名单内解析（key 已过 Go 归属闸），
+        # 名字不在白名单/歧义 → 返回工具文本让模型自纠，绝不触达任意对象。
+        staged: list[tuple[str, str]] = []
+        if input_files:
+            staged, problems = resolve_input_files(list(input_files), _attachments_from_config(config))
+            if problems:
+                return ("；".join(problems), None)
+        req = build_request(
+            sk, script, script_args,
+            default_timeout=default_timeout, requested_timeout=timeout, input_files=staged,
+        )
         run_id = _run_id_from_config(config)
         result = await runner.run(req, run_id=run_id, tool_call_id=tool_call_id or "tc")
         head = "脚本执行完成" if result.ok else f"脚本执行失败(exit={result.exit_code}, timeout={result.timed_out})"
