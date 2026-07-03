@@ -61,6 +61,8 @@ enum EventType {
   EVENT_TYPE_PLAN_THOUGHT = 5; // 规划器思考（复用 ThoughtPayload，带 planner_round_id）
   EVENT_TYPE_PLAN = 6;         // 计划快照（PlanPayload）
   EVENT_TYPE_TASK = 7;         // 单个 <sep> 子任务（TaskPayload）
+  // —— M11 HITL 加性扩展（仍 v1）——
+  EVENT_TYPE_APPROVAL_REQUEST = 8; // 人工审批请求（ApprovalPayload；finish 恒 false——审批=run 边界）
   // heartbeat 不在此：网关注入的传输关注点，不过 gRPC、不入库、不参与重放比对。
 }
 
@@ -88,6 +90,7 @@ message Event {
     ResultPayload result = 19;
     PlanPayload plan = 20;
     TaskPayload task = 21;
+    ApprovalPayload approval = 22; // M11 HITL
   }
 }
 
@@ -123,9 +126,28 @@ message ToolPayload {
   repeated ArtifactRef artifact_refs = 10;
 }
 
+// M11 · 人工审批请求：受保护工具在执行前经 LangGraph interrupt 挂起，
+// run 以"审批=run 边界"收尾（本事件 finish=false + 随后的挂起 RESULT finish=true）；
+// 决议经 POST /runs/{id}/approvals 以 resume metadata 开新 run 继续（PG checkpoint 续图）。
+message ApprovalPayload {
+  string approval_id = 1;                    // 挂起时生成，checkpoint 持久（重放重生成值不外泄）
+  string tool_name = 2;                      // 受保护工具名
+  google.protobuf.Struct input = 3;          // 工具入参预览（用户据此决策）
+  string reason = 4;                         // 为什么需要审批（配置说明）
+  repeated string pending_tool_call_ids = 5; // run1 中已发 RUNNING 的工具卡（前端翻"待审批"防孤儿转圈）
+}
+
+// M11 · 累计 token 用量（mapper 全 run 聚合，随终态 RESULT 附带；Go 落 runs 表）。
+message UsageInfo {
+  int64 input_tokens = 1;
+  int64 output_tokens = 2;
+  int32 model_calls = 3;
+}
+
 message ResultPayload {
   string text = 1;                       // 最终答复
   repeated ArtifactRef artifact_refs = 2;
+  UsageInfo usage = 3;                   // M11 加性；缺省=旧端零值
 }
 
 // 沿用原项目 8 字段形状：artifact UI 零改、缺文件降级显式。

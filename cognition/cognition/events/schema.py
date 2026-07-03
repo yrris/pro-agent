@@ -41,6 +41,8 @@ class EventType(str, Enum):
     PLAN_THOUGHT = "plan_thought"  # 规划器思考（复用 ThoughtPayload + planner_round_id）
     PLAN = "plan"                  # 计划快照（PlanPayload）
     TASK = "task"                  # 单个 <sep> 子任务（TaskPayload）
+    # —— M11 HITL 加性扩展 ——
+    APPROVAL_REQUEST = "approval_request"  # 人工审批请求（ApprovalPayload；finish 恒 False）
 
 
 class ToolCallStatus(str, Enum):
@@ -106,11 +108,34 @@ class ToolPayload(BaseModel):
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
 
 
+class ApprovalPayload(BaseModel):
+    """approval_request 载荷（M11 HITL）：受保护工具挂起时的审批请求。
+
+    pending_tool_call_ids：run1 已发 RUNNING 的工具卡 id——前端据此把卡翻成
+    "待审批"（不发伪造终态帧；validate 只认 running/success/failed）。
+    """
+
+    approval_id: str = ""
+    tool_name: str = ""
+    input: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+    pending_tool_call_ids: list[str] = Field(default_factory=list)
+
+
+class UsageInfo(BaseModel):
+    """全 run 累计 token 用量（mapper 单咽喉聚合，随终态 RESULT 附带）。"""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    model_calls: int = 0
+
+
 class ResultPayload(BaseModel):
     """result 载荷。"""
 
     text: str = ""
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
+    usage: Optional[UsageInfo] = None  # M11 加性；None=不带（旧行为）
 
 
 class Event(BaseModel):
@@ -133,6 +158,7 @@ class Event(BaseModel):
     result: Optional[ResultPayload] = None
     plan: Optional[PlanPayload] = None
     task: Optional[TaskPayload] = None
+    approval: Optional[ApprovalPayload] = None
 
     @model_validator(mode="after")
     def _check_invariants(self) -> "Event":
@@ -149,11 +175,12 @@ class Event(BaseModel):
             EventType.PLAN_THOUGHT: self.tool_thought,
             EventType.PLAN: self.plan,
             EventType.TASK: self.task,
+            EventType.APPROVAL_REQUEST: self.approval,
         }[self.type]
         if expected is None:
             raise ValueError(f"event type {self.type.value} requires its matching payload")
-        # 镜像 Go Validate：plan / task 为单条终态（is_final=True）。
-        if self.type in (EventType.PLAN, EventType.TASK) and not self.is_final:
+        # 镜像 Go Validate：plan / task / approval_request 为单条终态（is_final=True）。
+        if self.type in (EventType.PLAN, EventType.TASK, EventType.APPROVAL_REQUEST) and not self.is_final:
             raise ValueError(f"event type {self.type.value} must have is_final=True")
         return self
 
@@ -172,6 +199,7 @@ class Event(BaseModel):
             EventType.PLAN_THOUGHT: pb.EVENT_TYPE_PLAN_THOUGHT,
             EventType.PLAN: pb.EVENT_TYPE_PLAN,
             EventType.TASK: pb.EVENT_TYPE_TASK,
+            EventType.APPROVAL_REQUEST: pb.EVENT_TYPE_APPROVAL_REQUEST,
         }
 
         proto = pb.Event(
@@ -212,12 +240,29 @@ class Event(BaseModel):
         elif self.type is EventType.TOOL_RESULT and self.tool_result is not None:
             proto.tool_result.CopyFrom(_tool_payload_to_proto(self.tool_result, pb))
         elif self.type is EventType.RESULT and self.result is not None:
-            proto.result.CopyFrom(
-                pb.ResultPayload(
-                    text=self.result.text,
-                    artifact_refs=[_artifact_to_proto(a, pb) for a in self.result.artifact_refs],
-                )
+            rp = pb.ResultPayload(
+                text=self.result.text,
+                artifact_refs=[_artifact_to_proto(a, pb) for a in self.result.artifact_refs],
             )
+            if self.result.usage is not None:
+                rp.usage.CopyFrom(
+                    pb.UsageInfo(
+                        input_tokens=self.result.usage.input_tokens,
+                        output_tokens=self.result.usage.output_tokens,
+                        model_calls=self.result.usage.model_calls,
+                    )
+                )
+            proto.result.CopyFrom(rp)
+        elif self.type is EventType.APPROVAL_REQUEST and self.approval is not None:
+            ap = pb.ApprovalPayload(
+                approval_id=self.approval.approval_id,
+                tool_name=self.approval.tool_name,
+                reason=self.approval.reason,
+                pending_tool_call_ids=list(self.approval.pending_tool_call_ids),
+            )
+            if self.approval.input:
+                ap.input.update(self.approval.input)
+            proto.approval.CopyFrom(ap)
         return proto
 
 
