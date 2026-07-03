@@ -5,6 +5,7 @@ import { useRunStream } from "./hooks/useRunStream";
 import { LoginView } from "./views/LoginView";
 import { ChatView } from "./views/ChatView";
 import { Header } from "./components/Header";
+import { UsageDialog } from "./components/UsageDialog";
 import { Sidebar } from "./components/Sidebar";
 import { listServerSessions, type AttachmentRef, type ServerSession } from "./lib/api/client";
 import {
@@ -28,6 +29,7 @@ export default function App() {
   const [prefs] = useState(loadUiPrefs);
   const [sidebarOpen, setSidebarOpen] = useState(prefs.sidebarOpen);
   const [artifactsOpen, setArtifactsOpen] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
   const [artifactsWidth, setArtifactsWidth] = useState(prefs.artifactsWidth);
   useEffect(() => {
     saveUiPrefs({ sidebarOpen, artifactsWidth });
@@ -145,7 +147,9 @@ export default function App() {
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
         artifactsOpen={artifactsOpen}
         onToggleArtifacts={() => setArtifactsOpen((v) => !v)}
+        onOpenUsage={() => setUsageOpen(true)}
       />
+      <UsageDialog open={usageOpen} onOpenChange={setUsageOpen} />
       <div className="flex min-h-0 flex-1">
         {sidebarOpen && (
           <Sidebar
@@ -169,6 +173,7 @@ export default function App() {
           artifactsWidth={artifactsWidth}
           onArtifactsWidthChange={(w) => setArtifactsWidth(clampArtifactsWidth(w))}
           onApprovalDecision={onApprovalDecision}
+          onOpenSession={(id) => void selectSession(id)}
         />
       </div>
     </div>

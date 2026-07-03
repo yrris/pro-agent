@@ -1,9 +1,10 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { Database, FileText, Loader2, RotateCw, Trash2, Upload, X } from "lucide-react";
+import { CalendarClock, Database, FileText, Loader2, RotateCw, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
 import { deleteKbDoc, downloadArtifact, ingestKbDoc, listKbDocs, uploadFile, type KbDoc } from "../lib/api/client";
 import { ArtifactWorkspace } from "./ArtifactWorkspace";
+import { SchedulesPanel } from "./SchedulesPanel";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -175,11 +176,13 @@ function KnowledgePanel() {
 export const FilesPanel = memo(function FilesPanel({
   artifacts,
   onClose,
+  onOpenSession,
 }: {
   artifacts: ArtifactRef[];
   onClose: () => void;
+  onOpenSession?: (sessionId: string) => void;
 }) {
-  const [tab, setTab] = useState<"artifacts" | "kb">("artifacts");
+  const [tab, setTab] = useState<"artifacts" | "kb" | "schedules">("artifacts");
   return (
     <div className="flex h-full flex-col border-l bg-background">
       <div className="flex items-center gap-1 border-b px-2 py-1.5">
@@ -202,6 +205,15 @@ export const FilesPanel = memo(function FilesPanel({
           知识库
         </button>
         <button
+          onClick={() => setTab("schedules")}
+          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-sm transition-colors ${
+            tab === "schedules" ? "bg-accent text-foreground" : "text-stone-500 hover:text-foreground"
+          }`}
+        >
+          <CalendarClock className="size-3.5" />
+          定时
+        </button>
+        <button
           onClick={onClose}
           aria-label="关闭"
           className="ml-auto rounded p-1.5 text-stone-400 transition-colors hover:text-foreground"
@@ -216,6 +228,9 @@ export const FilesPanel = memo(function FilesPanel({
         </div>
         <div className={tab === "kb" ? "h-full" : "hidden"}>
           <KnowledgePanel />
+        </div>
+        <div className={tab === "schedules" ? "h-full" : "hidden"}>
+          <SchedulesPanel onOpenSession={onOpenSession} />
         </div>
       </div>
     </div>

@@ -1,4 +1,4 @@
-import { FolderOpen, PanelLeft } from "lucide-react";
+import { ChartColumn, FolderOpen, PanelLeft } from "lucide-react";
 import type { HealthReport } from "../lib/api/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -68,6 +68,7 @@ export function Header({
   onToggleSidebar,
   artifactsOpen,
   onToggleArtifacts,
+  onOpenUsage,
 }: {
   health: HealthReport | null;
   userId: string;
@@ -76,6 +77,7 @@ export function Header({
   onToggleSidebar: () => void;
   artifactsOpen: boolean;
   onToggleArtifacts: () => void;
+  onOpenUsage: () => void;
 }) {
   return (
     <header className="flex items-center gap-2 border-b px-3 py-2">
@@ -88,6 +90,9 @@ export function Header({
       <span className="hidden text-xs text-stone-500 sm:inline">多智能体平台</span>
       <div className="ml-auto flex items-center gap-1.5">
         <HealthBadge report={health} />
+        <IconAction label="用量与成本" onClick={onOpenUsage}>
+          <ChartColumn />
+        </IconAction>
         {/* Files 面板在 <lg 视口隐藏（右栏 lg:block）→ 开关也仅在 lg 显示，
             否则窄屏点了高亮却什么都不弹（无效按钮）。 */}
         <span className="hidden lg:contents">

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, Download, X } from "lucide-react";
 import { toast } from "sonner";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
@@ -140,7 +140,9 @@ function FilePreview({ art, text }: { art: ArtifactRef; text: string | null }) {
       );
     // 文档级预览美化：markdown 渲染成文档、html 进沙箱 iframe，而不是源码 dump。
     if (isHtml(mime, name))
-      return <iframe srcDoc={text} title={name} sandbox="" className="h-full w-full rounded-lg bg-white" />;
+            // allow-scripts：生成的交互网页/图表能跑；srcDoc 保持 opaque origin，
+      // 且绝不加 allow-same-origin（同源组合=沙箱逃逸）；内部 fetch 无 X-User-Id 撞 403 墙。
+      return <iframe srcDoc={text} title={name} sandbox="allow-scripts" className="h-full w-full rounded-lg bg-white" />;
     if (isMarkdown(mime, name))
       return (
         <div className="h-full overflow-auto p-4">
@@ -199,6 +201,12 @@ export const ArtifactWorkspace = memo(function ArtifactWorkspace({
 }) {
   const [active, setActive] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // 新产物到达即切到最新（"生成即所见"）：清掉手动选择，回落"最新一份"默认。
+  const prevLenRef = useRef(artifacts.length);
+  useEffect(() => {
+    if (artifacts.length > prevLenRef.current) setActive(null);
+    prevLenRef.current = artifacts.length;
+  }, [artifacts.length]);
   const current = artifacts.find((a) => a.resourceKey === active) ?? artifacts[artifacts.length - 1];
   const labels = useMemo(() => artifactLabels(artifacts), [artifacts]);
 

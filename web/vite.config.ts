@@ -13,6 +13,8 @@ const proxy = {
   "/sessions": { target: backend, changeOrigin: true },
   "/uploads": { target: backend, changeOrigin: true },
   "/kb": { target: backend, changeOrigin: true },
+  "/stats": { target: backend, changeOrigin: true },
+  "/schedules": { target: backend, changeOrigin: true },
   "/artifacts": { target: backend, changeOrigin: true },
   "/healthz": { target: backend, changeOrigin: true },
 };

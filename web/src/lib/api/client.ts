@@ -193,3 +193,75 @@ export async function resolveApproval(
   if (!res.ok || !res.body) throw new Error(`resolveApproval failed: ${res.status}`);
   return { runId: res.headers.get("X-Run-Id") ?? "", reader: res.body.getReader() };
 }
+
+
+// —— M11 成本面板 / 定时任务 ——
+
+export interface UsageTotals {
+  runs: number;
+  inputTokens: number;
+  outputTokens: number;
+  modelCalls: number;
+}
+
+export interface UsageReport {
+  days: number;
+  totals: UsageTotals;
+  daily: { date: string; runs: number; inputTokens: number; outputTokens: number }[];
+  byAgent: { agentType: string; runs: number; inputTokens: number; outputTokens: number }[];
+}
+
+export async function getUsageStats(days = 30): Promise<UsageReport> {
+  const res = await fetch(`/stats/usage?days=${days}`, { headers: headers() });
+  if (!res.ok) throw new Error(`getUsageStats failed: ${res.status}`);
+  return (await res.json()) as UsageReport;
+}
+
+export interface ScheduleItem {
+  scheduleId: string;
+  sessionId: string;
+  query: string;
+  agentType: string;
+  intervalSeconds: number;
+  enabled: boolean;
+  nextRunAt: string;
+  lastRunId?: string;
+  createdAt: string;
+}
+
+export async function listSchedules(): Promise<ScheduleItem[]> {
+  const res = await fetch("/schedules", { headers: headers() });
+  if (!res.ok) throw new Error(`listSchedules failed: ${res.status}`);
+  const data = (await res.json()) as { schedules: ScheduleItem[] };
+  return data.schedules ?? [];
+}
+
+export async function createSchedule(body: {
+  query: string;
+  agentType: string;
+  intervalSeconds: number;
+}): Promise<void> {
+  const res = await fetch("/schedules", {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`createSchedule failed: ${res.status}`);
+}
+
+export async function deleteSchedule(id: string): Promise<void> {
+  const res = await fetch(`/schedules/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  if (!res.ok) throw new Error(`deleteSchedule failed: ${res.status}`);
+}
+
+export async function toggleSchedule(id: string, enabled: boolean): Promise<void> {
+  const res = await fetch(`/schedules/${encodeURIComponent(id)}/toggle`, {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) throw new Error(`toggleSchedule failed: ${res.status}`);
+}
