@@ -76,7 +76,8 @@ async def test_deep_research_registers_with_unique_name():
         config={"metadata": {"agent_type": "deep_research", "request_id": "r1"}},
     )
     assert msg.artifact is not None
-    assert msg.artifact["file_name"] == "search-results-abcdef.md"
+    # 尾 6 位：DeepSeek id 前缀恒 call_0，取头部必撞名（实测）。
+    assert msg.artifact["file_name"] == "search-results-cdef99.md"
 
     # 非研究模式带 config 也保持静默。
     msg2 = await tool.ainvoke(

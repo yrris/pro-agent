@@ -39,9 +39,12 @@ def _agent_type_from_config(config: Optional[RunnableConfig]) -> str:
 
 
 def search_artifact_file_name(agent_type: str, tool_call_id: str) -> Optional[str]:
-    """产物登记决策（纯函数）：None=不登记；deep_research 用 tcid 后缀唯一命名。"""
+    """产物登记决策（纯函数）：None=不登记；deep_research 用 tcid 唯一命名。
+
+    取**尾** 6 位：DeepSeek 的 id 形如 call_00_<rand>，前缀几乎恒为 "call_0"，
+    取头部会让所有检索产物撞成同一个名字（实测踩坑）。"""
     if agent_type == "deep_research":
-        suffix = (tool_call_id or "tc")[:6]
+        suffix = (tool_call_id or "tc")[-6:]
         return f"search-results-{suffix}.md"
     return None
 
