@@ -18,6 +18,7 @@ import (
 	"my-agent/control-plane/internal/dispatch"
 	"my-agent/control-plane/internal/health"
 	"my-agent/control-plane/internal/kb"
+	"my-agent/control-plane/internal/scheduler"
 	"my-agent/control-plane/internal/store"
 	"my-agent/control-plane/internal/stream"
 )
@@ -72,7 +73,12 @@ func main() {
 		kbIface = kbStore
 	}
 	statsRepo := store.NewStatsRepository(pool)
-	router := api.NewRouter(dispatcher, runs, sessions, events, artStore, healthChecks, kbIface, client, statsRepo, cfg.RunTimeout, cfg.WebDir, log)
+	schedRepo := store.NewSchedulesRepository(pool)
+	router := api.NewRouter(dispatcher, runs, sessions, events, artStore, healthChecks, kbIface, client, statsRepo, schedRepo, cfg.RunTimeout, cfg.WebDir, log)
+
+	// M11 定时触发：调度器 goroutine（优雅停机时 cancel；headless run 自建超时）。
+	schedCtx, schedCancel := context.WithCancel(context.Background())
+	go scheduler.New(schedRepo, runs, dispatcher, cfg.RunTimeout, 30*time.Second, 2, log).Run(schedCtx)
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: router}
 
@@ -87,6 +93,7 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
+	schedCancel()
 	log.Info("shutting down")
 	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

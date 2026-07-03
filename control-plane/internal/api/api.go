@@ -36,6 +36,7 @@ type handlers struct {
 	kb             kb.Store
 	cog            cognition.Client
 	stats          store.StatsRepository
+	schedules      store.SchedulesRepository
 	runTimeout     time.Duration
 	maxUploadBytes int64
 	log            *slog.Logger
@@ -44,10 +45,10 @@ type handlers struct {
 // NewRouter 装配路由与中间件。artifacts 可为 nil（仅 /artifacts 不可用）；
 // sessions 可为 nil（仅 /sessions 不可用）；healthChecks 可为 nil（/healthz 退化为「进程存活即 200」）；
 // webDir 非空时经 NotFound 托管前端静态资源 + SPA 回退（已注册 API 路由优先匹配，零冲突）。
-func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.SessionRepository, events store.EventRepository, artifacts artifact.Store, healthChecks map[string]health.Check, kbStore kb.Store, cog cognition.Client, stats store.StatsRepository, runTimeout time.Duration, webDir string, log *slog.Logger) http.Handler {
+func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.SessionRepository, events store.EventRepository, artifacts artifact.Store, healthChecks map[string]health.Check, kbStore kb.Store, cog cognition.Client, stats store.StatsRepository, schedules store.SchedulesRepository, runTimeout time.Duration, webDir string, log *slog.Logger) http.Handler {
 	h := &handlers{
 		dispatcher: d, runs: runs, sessions: sessions, events: events, artifacts: artifacts,
-		healthChecks: healthChecks, kb: kbStore, cog: cog, stats: stats, runTimeout: runTimeout,
+		healthChecks: healthChecks, kb: kbStore, cog: cog, stats: stats, schedules: schedules, runTimeout: runTimeout,
 		maxUploadBytes: DefaultMaxUploadBytes, log: log,
 	}
 	if v := os.Getenv("MAX_UPLOAD_BYTES"); v != "" {
@@ -70,6 +71,11 @@ func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.
 	r.Post("/kb/docs", h.ingestKbDoc)
 	r.Delete("/kb/docs", h.deleteKbDoc)
 	r.Get("/stats/usage", h.usageStats) // M11 成本面板（owner 域聚合，纯读）
+	// M11 定时任务（Proactive）：owner 域 CRUD；触发由 internal/scheduler。
+	r.Get("/schedules", h.listSchedules)
+	r.Post("/schedules", h.createSchedule)
+	r.Delete("/schedules/{scheduleID}", h.deleteSchedule)
+	r.Post("/schedules/{scheduleID}/toggle", h.toggleSchedule)
 	r.Get("/artifacts/*", h.artifact)
 	if webDir != "" {
 		r.NotFound(spaHandler(webDir))
