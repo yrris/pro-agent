@@ -99,7 +99,9 @@ func (h *handlers) startRun(w http.ResponseWriter, r *http.Request) {
 		sessionID = uuid.NewString()
 	}
 	agentType := body.AgentType
-	if agentType != "plan_solve" { // 仅这两种；其余按 react 兜底
+	switch agentType {
+	case "plan_solve", "deep_research": // 三档模式：快速(react)/深度思考/深度研究
+	default:
 		agentType = "react"
 	}
 	ownerID := ownerOf(r)

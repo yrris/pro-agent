@@ -106,11 +106,26 @@ async def serve(settings: Settings | None = None) -> None:
         react_recursion_limit=2 * settings.max_steps + 5,
         checkpointer=checkpointer,
     )
+    # deep_research：同拓扑第二编译图（研究提示词 + 更高轮次预算，executor 子图共享）。
+    from cognition.graphs.plan_execute import RESEARCH_PLANNER_SYSTEM
+
+    research_graph = build_plan_execute_graph(
+        planner_model,
+        executor_subgraph,
+        tools,
+        max_steps=settings.research_max_steps,
+        max_parallel=settings.max_parallel_tasks,
+        sop_store=default_sop_store(),
+        branch_timeout=settings.branch_timeout_seconds,
+        react_recursion_limit=2 * settings.max_steps + 5,
+        checkpointer=checkpointer,
+        planner_system=RESEARCH_PLANNER_SYSTEM,
+    )
 
     server = grpc.aio.server()
     agent_pb2_grpc.add_CognitionServiceServicer_to_server(
         CognitionServicer(
-            react_graph, settings, plan_graph=plan_graph,
+            react_graph, settings, plan_graph=plan_graph, research_graph=research_graph,
             tool_providers=provider_map, ingest_attachments_fn=ingest_fn,
         ),
         server,

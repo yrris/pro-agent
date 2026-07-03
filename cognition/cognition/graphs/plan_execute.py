@@ -76,6 +76,19 @@ PLANNER_SYSTEM = (
     "直接写进步骤文本。产出必须明确（生成文件的步骤要点名用 write_report 工具）。"
 )
 
+# 深度研究模式的规划器提示词（M9：agent_type=deep_research 用第二编译图，
+# 拓扑与 plan_solve 完全相同，仅提示词与轮次预算不同——"配置化变体而非新图"）。
+RESEARCH_PLANNER_SYSTEM = (
+    "你是深度研究规划器。面对研究型问题，把调研拆解为有序步骤并调用 planning 工具产出 "
+    "{title, steps}：先**广度检索**（knowledge_search 检索用户知识库；如有网页/搜索类工具"
+    "也应使用），再**交叉验证**关键论断（不同角度/来源互证），最后**汇总**为带〔n〕引用的"
+    "结论。同一步骤内可并行的检索用字面量 <sep> 分隔。\n"
+    "{{sop}}\n"
+    "硬性要求：每个步骤必须自包含（执行者看不到对话历史，禁止「上面/之前」等指代，"
+    "要查的问题与期望证据写进步骤文本）；结论只能基于检索到的证据并标注〔n〕引用，"
+    "证据不足必须如实说明而非编造；产出最终研究报告的步骤要点名用 write_report 工具。"
+)
+
 
 # ——————————————————————————————————————————————————————————————
 # planning 工具（规划器的结构化输出通道）与解析
@@ -337,8 +350,12 @@ def build_plan_execute_graph(
     branch_timeout: float = 120.0,
     react_recursion_limit: int = 85,
     checkpointer: Optional[BaseCheckpointSaver] = None,
+    planner_system: str = PLANNER_SYSTEM,
 ) -> CompiledStateGraph:
     """装配并编译 Plan-Execute 图。
+
+    planner_system：规划器系统提示词（deep_research 变体传 RESEARCH_PLANNER_SYSTEM，
+    其余拓扑/节点完全共享——同一套图的配置化变体，不是新图）。
 
     Args:
         planner_model: 规划器模型（产出步骤/思考；可绑定 planning 工具）。
@@ -383,7 +400,7 @@ def build_plan_execute_graph(
         # tool_calls 永远没有 ToolMessage 应答，真实 provider（DeepSeek/OpenAI/Anthropic）
         # 第二轮起会 400。入模型前做修复投影（补合成应答），state 原样累积不动。
         history = repair_dangling_tool_calls(list(state.get("planner_messages") or []))
-        system = SystemMessage(content=PLANNER_SYSTEM.replace("{{sop}}", sop))
+        system = SystemMessage(content=planner_system.replace("{{sop}}", sop))
 
         new_msgs: list = []
         reduced: Optional[str] = None

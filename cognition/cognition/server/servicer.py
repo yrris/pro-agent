@@ -27,6 +27,7 @@ from cognition.observability.langfuse_seam import build_langfuse_callbacks
 logger = logging.getLogger(__name__)
 
 AGENT_TYPE_PLAN_SOLVE = "plan_solve"
+AGENT_TYPE_DEEP_RESEARCH = "deep_research"
 
 
 def resolve_kb_id(request) -> str:
@@ -54,11 +55,21 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
         react_graph,
         settings: Settings,
         plan_graph=None,
+        research_graph=None,
         tool_providers=None,
         ingest_attachments_fn=None,
     ) -> None:
         self.react_graph = react_graph
         self.plan_graph = plan_graph
+        # plan 家族路由表：deep_research 缺省回退 plan_solve 图（提示词非研究版但可用）。
+        self.plan_graphs = {
+            k: g
+            for k, g in {
+                AGENT_TYPE_PLAN_SOLVE: plan_graph,
+                AGENT_TYPE_DEEP_RESEARCH: research_graph or plan_graph,
+            }.items()
+            if g is not None
+        }
         self.settings = settings
         # 工具名 → provider（local/mcp/skill），装配期从工具集构建后注入 EventMapper。
         self.tool_providers = dict(tool_providers or {})
@@ -73,9 +84,9 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
         agent_type = request.agent_type or "react"
         attachments = normalize_attachments(getattr(request, "attachments", []) or [])
 
-        if agent_type == AGENT_TYPE_PLAN_SOLVE and self.plan_graph is not None:
-            # plan 模式不做图片多模态（planner 无 messages 接缝，见 docs/08 §4 已知限制）：
-            # 附件以短注记进 query（planner 拆步骤时可引用），文本类已由入库预步进知识库。
+        if agent_type in self.plan_graphs:
+            # plan 家族（plan_solve/deep_research）不做图片多模态（planner 无 messages
+            # 接缝，见 docs/08 §4 已知限制）：附件以短注记进 query，文本类已入知识库。
             query = request.query
             if attachments:
                 query = f"{request.query}\n{attachment_note(attachments, ingested_names)}"
@@ -93,8 +104,15 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
                 "sub_results": [],
             }
             # 外层循环 + 并行分支 join 占用 superstep，留足余量。
-            recursion = 4 * int(self.settings.planner_max_steps) + 25
-            return self.plan_graph, state, recursion
+            # recursion 预算按 agent_type 取各自轮次上限——deep_research 轮次更多，
+            # 硬绑 planner_max_steps 会在研究后期 GraphRecursionError。
+            steps_budget = (
+                int(self.settings.research_max_steps)
+                if agent_type == AGENT_TYPE_DEEP_RESEARCH
+                else int(self.settings.planner_max_steps)
+            )
+            recursion = 4 * steps_budget + 25
+            return self.plan_graphs[agent_type], state, recursion
 
         if attachments:
             # 附件消息：文本块（query+清单注记）+ 图片 pro_attachment 引用块
@@ -153,6 +171,7 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
             "run_id": run_id,
             "session_id": session_id,
             "kb_id": kb_id,
+            "agent_type": agent_type,  # 研究模式的提示门与检索产物例外共用（M9）
         }
         if attachments:
             import json as _json

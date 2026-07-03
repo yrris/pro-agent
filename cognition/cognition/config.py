@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     # —— Plan-Execute（M2）——
     # 外层 plan→execute→replan 循环上限（镜像原项目 plannerMaxSteps，默认 5）。
     planner_max_steps: int = Field(default=5, ge=1)
+    # 深度研究模式（deep_research）的外层轮次上限：研究需要更多"检索-验证-推进"轮。
+    research_max_steps: int = Field(default=8, ge=1)
     # 并行子任务宽度上限（镜像 maxParallelTasks，默认 2）。
     max_parallel_tasks: int = Field(default=2, ge=1)
     # 单个并行分支（executor 子图）的超时秒数。默认 300：思考模型（reasoning）输出
