@@ -100,6 +100,36 @@ export function applyFrame(state: RunState, frame: SseFrame): RunState {
       next.order = withOrder(state.order, "result", "result");
       break;
     }
+    case "approval_request": {
+      // M11 HITL：同 id 原位更新（pending；决议由 resumeApproval 本地补丁）。
+      const ap = frame.approval;
+      if (ap?.approvalId) {
+        next.approvals = {
+          ...state.approvals,
+          [ap.approvalId]: {
+            approvalId: ap.approvalId,
+            toolName: ap.toolName ?? "",
+            input: ap.input,
+            reason: ap.reason,
+            status: state.approvals[ap.approvalId]?.status ?? "pending",
+          },
+        };
+        // run1 中已 RUNNING 的工具卡翻"待审批"（不然回放里永远转圈）。
+        const pend = ap.pendingToolCallIds ?? [];
+        if (pend.length > 0) {
+          const calls = { ...state.toolCalls };
+          for (const id of pend) {
+            const c = calls[id];
+            if (c && c.status === "running") {
+              calls[id] = { ...c, status: "awaiting_approval", summary: "等待人工审批" };
+            }
+          }
+          next.toolCalls = calls;
+        }
+        next.order = withOrder(state.order, "approval", ap.approvalId);
+      }
+      break;
+    }
     case "heartbeat":
       return state; // 忽略
     default:

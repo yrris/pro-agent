@@ -229,6 +229,7 @@ export function ChatView({
   onArtifactsOpenChange,
   artifactsWidth,
   onArtifactsWidthChange,
+  onApprovalDecision,
 }: {
   timeline: RunTurn[];
   live: RunTurn | null;
@@ -242,6 +243,7 @@ export function ChatView({
   onArtifactsOpenChange: (open: boolean) => void;
   artifactsWidth: number;
   onArtifactsWidthChange: (w: number) => void;
+  onApprovalDecision?: (approvalId: string, approved: boolean, comment?: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -324,9 +326,14 @@ export function ChatView({
             </div>
           ) : (
             <div className="mx-auto max-w-3xl">
-              {timeline.map((turn) => (
+              {timeline.map((turn, i) => (
                 <div key={turn.runId} className="mb-6">
-                  <MessageList state={turn.state} query={turn.query} attachments={turn.attachments} />
+                  <MessageList
+                    state={turn.state}
+                    query={turn.query}
+                    attachments={turn.attachments}
+                    onApprovalDecision={i === timeline.length - 1 && !live ? onApprovalDecision : undefined}
+                  />
                   {turn.failed && (
                     <div className="mt-1 text-xs text-amber-400">
                       ⚠ 此轮未走到终态（中断/出错/仍在运行），仅展示已落库部分
@@ -334,7 +341,7 @@ export function ChatView({
                   )}
                 </div>
               ))}
-              {live && <MessageList state={live.state} query={live.query} attachments={live.attachments} running={status === "running"} />}
+              {live && <MessageList state={live.state} query={live.query} attachments={live.attachments} running={status === "running"} onApprovalDecision={onApprovalDecision} />}
               {loadingHistory && (
                 <div className="mt-3 space-y-2">
                   <div className="text-sm text-stone-500 pulse-dot">● 载入历史会话…</div>

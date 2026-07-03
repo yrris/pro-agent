@@ -8,6 +8,7 @@ export type MessageType =
   | "plan_thought"
   | "plan"
   | "task"
+  | "approval_request" // M11 HITL：人工审批请求（审批=run 边界）
   | "heartbeat";
 
 export interface ArtifactRef {
@@ -33,6 +34,15 @@ export interface PlanFrame {
   steps: string[];
   stepStatus: string[];
   notes: string[];
+}
+
+// M11 HITL：approval_request 帧载荷（对齐 event.ApprovalPayload 的 json tag）。
+export interface ApprovalFrame {
+  approvalId: string;
+  toolName: string;
+  input?: unknown;
+  reason?: string;
+  pendingToolCallIds?: string[];
 }
 
 export interface ResultMap {
@@ -63,6 +73,7 @@ export interface SseFrame {
   task?: string;
   resultMap?: ResultMap;
   artifactRefs?: ArtifactRef[];
+  approval?: ApprovalFrame; // M11
 }
 
 // —— 归并后的视图模型（组件只读） ——
@@ -101,7 +112,17 @@ export interface TaskView {
   text: string;
 }
 
-export type OrderKind = "thought" | "toolCall" | "toolResult" | "plan" | "task" | "result";
+// M11 HITL：审批卡视图（同 id 原位更新；decision 由前端 resumeApproval 本地补丁——
+// run1 账本只记请求，决议链在 run2）。
+export interface ApprovalView {
+  approvalId: string;
+  toolName: string;
+  input?: unknown;
+  reason?: string;
+  status: "pending" | "approved" | "rejected";
+}
+
+export type OrderKind = "thought" | "toolCall" | "toolResult" | "plan" | "task" | "result" | "approval";
 export interface OrderEntry {
   kind: OrderKind;
   key: string;
@@ -116,6 +137,7 @@ export interface RunState {
   plannerRounds: PlanView[];
   tasks: TaskView[];
   result?: { text: string; artifacts: ArtifactRef[] };
+  approvals: Record<string, ApprovalView>; // M11
   artifacts: ArtifactRef[];
   finished: boolean;
   order: OrderEntry[];
@@ -128,6 +150,7 @@ export function emptyRunState(runId = ""): RunState {
     thoughts: {},
     toolCalls: {},
     toolResults: [],
+    approvals: {},
     plannerRounds: [],
     tasks: [],
     artifacts: [],

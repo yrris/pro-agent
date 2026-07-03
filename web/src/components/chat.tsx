@@ -1,7 +1,7 @@
 import { memo, useState } from "react";
 import { Check, Copy, Paperclip } from "lucide-react";
 import type { AttachmentRef } from "../lib/api/client";
-import type { PlanView as PlanViewT, RunState, ToolCallView } from "../lib/sse/frameTypes";
+import type { ApprovalView, PlanView as PlanViewT, RunState, ToolCallView } from "../lib/sse/frameTypes";
 import { Collapsible, Markdown, ProviderTag, ToolStatusBadge } from "./common";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -140,9 +140,64 @@ function Conclusion({ text }: { text: string }) {
   );
 }
 
-// 预留：Proactive/审批卡片位（当前后端不发此类事件，占位不渲染）。
-export function ApprovalCardSlot() {
-  return null;
+// M11 HITL：人工审批卡。live/最后一轮可操作（onDecide 传入且 pending）；
+// 其余（历史回放/已决议）只读展示。决议后按钮即禁用（本地补丁 + 后端幂等校验双保险）。
+export function ApprovalCard({
+  approval,
+  onDecide,
+}: {
+  approval: ApprovalView;
+  onDecide?: (approvalId: string, approved: boolean, comment?: string) => void;
+}) {
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  const pending = approval.status === "pending";
+  const actionable = pending && !!onDecide && !busy;
+  const decide = (approved: boolean) => {
+    if (!onDecide) return;
+    setBusy(true);
+    onDecide(approval.approvalId, approved, comment.trim() || undefined);
+  };
+  return (
+    <Card className="gap-0 border-amber-500/30 bg-amber-500/[0.06] px-4 py-3">
+      <div className="mb-1 flex items-center gap-2 text-sm">
+        <span className="text-amber-300">🖐 需要人工审批</span>
+        <span className="text-stone-300">{approval.toolName}</span>
+        {approval.status === "approved" && <Badge className="bg-emerald-500/15 text-emerald-300">已批准</Badge>}
+        {approval.status === "rejected" && <Badge className="bg-rose-500/15 text-rose-300">已拒绝</Badge>}
+        {pending && !onDecide && <Badge className="bg-amber-500/15 text-amber-300">等待决议</Badge>}
+      </div>
+      {approval.reason && <div className="mb-2 text-xs text-stone-400">{approval.reason}</div>}
+      {approval.input != null && (
+        <pre className="mb-2 overflow-auto rounded-lg bg-black/30 p-2 text-xs text-stone-200">
+          {JSON.stringify(approval.input, null, 2)}
+        </pre>
+      )}
+      {actionable && (
+        <div className="flex items-center gap-2">
+          <input
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="备注（可选）"
+            className="min-w-0 flex-1 rounded-lg border bg-transparent px-2 py-1 text-xs text-stone-200 outline-none focus:border-stone-500"
+          />
+          <button
+            onClick={() => decide(true)}
+            className="rounded-lg bg-emerald-600/80 px-3 py-1 text-xs text-white transition-colors hover:bg-emerald-600"
+          >
+            批准
+          </button>
+          <button
+            onClick={() => decide(false)}
+            className="rounded-lg bg-rose-600/70 px-3 py-1 text-xs text-white transition-colors hover:bg-rose-600"
+          >
+            拒绝
+          </button>
+        </div>
+      )}
+      {busy && <div className="text-xs text-stone-500 pulse-dot">● 正在提交决议…</div>}
+    </Card>
+  );
 }
 
 // 发送轮的附件 chips（挂在用户气泡下方；历史回放轮无附件元数据=已知限制）。
@@ -167,11 +222,14 @@ export const MessageList = memo(function MessageList({
   query,
   attachments,
   running,
+  onApprovalDecision,
 }: {
   state: RunState;
   query?: string;
   attachments?: AttachmentRef[];
   running?: boolean;
+  // M11：仅 live 轮/最后一轮传入（历史回放只读）；须为 useCallback 稳定引用（memo 纪律）。
+  onApprovalDecision?: (approvalId: string, approved: boolean, comment?: string) => void;
 }) {
   const resultByCall = new Map(state.toolResults.map((r) => [r.toolCallId, r.text]));
   return (
@@ -202,6 +260,10 @@ export const MessageList = memo(function MessageList({
                 resultText={resultByCall.get(call.toolCallId)}
               />
             ) : null;
+          }
+          case "approval": {
+            const a = state.approvals[entry.key];
+            return a ? <ApprovalCard key={k} approval={a} onDecide={onApprovalDecision} /> : null;
           }
           case "result":
             return state.result ? <Conclusion key={k} text={state.result.text} /> : null;

@@ -9,6 +9,7 @@ import { useCallback, useRef, useState } from "react";
 import {
   listSessionRuns,
   replay,
+  resolveApproval,
   startRun,
   type AttachmentRef,
   type SessionRunMeta,
@@ -191,5 +192,53 @@ export function useRunStream() {
     [beginGen, clearView, setStatus],
   );
 
-  return { timeline, live, status, error, loadingHistory, start, loadSession, resetAll };
+  // M11 HITL：审批决议 → 恢复 run（新一轮，与 start 同构）。归档前先本地补丁
+  // 当前 live 轮该审批的状态——run1 账本只记"请求"，决议链在 run2；不打补丁的话
+  // 归档轮的卡仍显示可操作 pending（二次点击只会得到优雅的"没有待审批"轮）。
+  const resumeApproval = useCallback(
+    async (approvalId: string, approved: boolean, comment?: string): Promise<string> => {
+      const paused = liveRef.current ?? null;
+      const pausedRunId = paused?.runId ?? "";
+      if (!pausedRunId) return "";
+      const gen = beginGen();
+      if (liveRef.current?.state.approvals[approvalId]) {
+        const st = liveRef.current.state;
+        liveRef.current = {
+          ...liveRef.current,
+          state: {
+            ...st,
+            approvals: {
+              ...st.approvals,
+              [approvalId]: { ...st.approvals[approvalId], status: approved ? "approved" : "rejected" },
+            },
+          },
+        };
+      }
+      archiveLive();
+      setError("");
+      setStatus("running");
+      const label = `[审批] ${approved ? "通过" : "拒绝"}${comment ? `：${comment}` : ""}`;
+      liveRef.current = { runId: "", query: label, state: emptyRunState() };
+      setLive(liveRef.current);
+      const ac = new AbortController();
+      abortRef.current = ac;
+      try {
+        const { runId, reader } = await resolveApproval(pausedRunId, approvalId, approved, comment, ac.signal);
+        if (genRef.current !== gen) return runId;
+        liveRef.current = { ...liveRef.current!, runId, state: { ...liveRef.current!.state, runId } };
+        setLive(liveRef.current);
+        void pump(reader, gen);
+        return runId;
+      } catch (e) {
+        if (genRef.current === gen) {
+          setStatus("error");
+          setError(e instanceof Error ? e.message : String(e));
+        }
+        return "";
+      }
+    },
+    [archiveLive, beginGen, pump, setStatus],
+  );
+
+  return { timeline, live, status, error, loadingHistory, start, loadSession, resetAll, resumeApproval };
 }

@@ -88,3 +88,53 @@ describe("applyFrame", () => {
     expect(s.order.map((e) => e.kind)).toEqual(["thought", "toolCall", "result"]);
   });
 });
+
+describe("approval_request（M11 HITL）", () => {
+  const ap = (o: Partial<SseFrame> = {}): SseFrame =>
+    ({
+      requestId: "r1",
+      messageId: "r1:approval:ap-1",
+      seq: 3,
+      messageType: "approval_request",
+      messageTime: "t",
+      isFinal: true,
+      finish: false,
+      approval: { approvalId: "ap-1", toolName: "calculator", reason: "高危", pendingToolCallIds: ["tc1"] },
+      ...o,
+    }) as SseFrame;
+
+  it("登记 pending 审批并把 RUNNING 工具卡翻待审批", () => {
+    let s = reduceFrames([
+      {
+        requestId: "r1", messageId: "tc1", seq: 1, messageType: "tool_call", messageTime: "t",
+        isFinal: false, finish: false,
+        resultMap: { toolCallId: "tc1", toolName: "calculator", status: "running" },
+      } as SseFrame,
+    ]);
+    s = applyFrame(s, ap());
+    expect(s.approvals["ap-1"].status).toBe("pending");
+    expect(s.approvals["ap-1"].toolName).toBe("calculator");
+    expect(s.toolCalls["tc1"].status).toBe("awaiting_approval");
+    expect(s.order.filter((e) => e.kind === "approval")).toHaveLength(1);
+    expect(s.unknown).toHaveLength(0); // 不再落 unknown
+  });
+
+  it("重复帧幂等（order/记录不重复）", () => {
+    let s = applyFrame(emptyRunState(), ap());
+    s = applyFrame(s, ap());
+    expect(Object.keys(s.approvals)).toHaveLength(1);
+    expect(s.order.filter((e) => e.kind === "approval")).toHaveLength(1);
+  });
+
+  it("已完成的工具卡不被回翻", () => {
+    let s = reduceFrames([
+      {
+        requestId: "r1", messageId: "tc1", seq: 1, messageType: "tool_call", messageTime: "t",
+        isFinal: true, finish: false,
+        resultMap: { toolCallId: "tc1", toolName: "calculator", status: "success" },
+      } as SseFrame,
+    ]);
+    s = applyFrame(s, ap());
+    expect(s.toolCalls["tc1"].status).toBe("success");
+  });
+});

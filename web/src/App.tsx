@@ -109,6 +109,16 @@ export default function App() {
     [ensureSessionId, agentType, run, refreshSessions],
   );
 
+  // M11 HITL：审批决议（稳定引用——MessageList memo 纪律）。
+  const onApprovalDecision = useCallback(
+    (approvalId: string, approved: boolean, comment?: string) => {
+      void run.resumeApproval(approvalId, approved, comment).then((runId) => {
+        if (runId) void refreshSessions();
+      });
+    },
+    [run, refreshSessions],
+  );
+
   const onNewSession = useCallback(() => {
     // 已停在一个空草稿上就复用它，避免连点"新会话"堆积幽灵草稿。
     const currentView = sessions.find((s) => s.id === currentSessionId);
@@ -158,6 +168,7 @@ export default function App() {
           onArtifactsOpenChange={setArtifactsOpen}
           artifactsWidth={artifactsWidth}
           onArtifactsWidthChange={(w) => setArtifactsWidth(clampArtifactsWidth(w))}
+          onApprovalDecision={onApprovalDecision}
         />
       </div>
     </div>

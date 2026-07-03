@@ -173,3 +173,23 @@ export async function ingestKbDoc(ref: AttachmentRef): Promise<{ ok: boolean; me
   if (!res.ok) throw new Error(`ingestKbDoc failed: ${res.status}`);
   return (await res.json()) as { ok: boolean; message?: string };
 }
+
+
+// —— M11 HITL：审批决议（响应即恢复 run 的 SSE 流，与 startRun 同构） ——
+
+export async function resolveApproval(
+  runId: string,
+  approvalId: string,
+  approved: boolean,
+  comment?: string,
+  signal?: AbortSignal,
+): Promise<RunHandle> {
+  const res = await fetch(`/runs/${encodeURIComponent(runId)}/approvals`, {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify({ approvalId, approved, comment: comment ?? "" }),
+    signal,
+  });
+  if (!res.ok || !res.body) throw new Error(`resolveApproval failed: ${res.status}`);
+  return { runId: res.headers.get("X-Run-Id") ?? "", reader: res.body.getReader() };
+}

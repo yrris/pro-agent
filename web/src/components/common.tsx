@@ -49,6 +49,7 @@ const STATUS_STYLE: Record<string, string> = {
   running: "bg-blue-500/15 text-blue-300 border-blue-500/30",
   success: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
   failed: "bg-rose-500/15 text-rose-300 border-rose-500/30",
+  awaiting_approval: "bg-amber-500/15 text-amber-300 border-amber-500/30", // M11 HITL
 };
 
 export function ToolStatusBadge({ status }: { status: string }) {
@@ -56,7 +57,7 @@ export function ToolStatusBadge({ status }: { status: string }) {
   return (
     <Badge className={`gap-1 rounded-full font-normal ${cls}`}>
       {status === "running" && <span className="pulse-dot">●</span>}
-      {status}
+      {status === "awaiting_approval" ? "待审批" : status}
     </Badge>
   );
 }
