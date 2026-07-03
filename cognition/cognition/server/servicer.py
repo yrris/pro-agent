@@ -18,7 +18,7 @@ import logging
 
 from langchain_core.messages import HumanMessage
 
-from cognition._genproto import agent_pb2_grpc
+from cognition._genproto import agent_pb2, agent_pb2_grpc
 from cognition.attachments import attachment_note, build_attachment_message, normalize_attachments
 from cognition.config import Settings
 from cognition.events.mapper import EventMapper
@@ -132,6 +132,33 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
         }
         recursion = 2 * int(max_steps) + 5
         return self.react_graph, state, recursion
+
+    async def IngestDocument(self, request, context):  # noqa: N802 (gRPC 方法名固定)
+        """Files 面板"上传即入库"（UX-1）：不经对话轮，直接把已上传对象送入 owner 知识库。
+
+        复用 Run 前置入库的同一条管线（build_ingestor：下载→提取→分块→内容寻址幂等
+        upsert），语义与"随消息附件入库"完全一致——同一文件两种入口不会产生重复向量。
+        kb 归属由服务端从 owner_id 推导，客户端不可指定（与 kb config 优先同一条纪律）。
+        """
+        owner = str(request.owner_id or "")
+        if not owner:
+            return agent_pb2.IngestDocumentResponse(ok=False, message="缺少 owner_id")
+        if self.ingest_attachments_fn is None:
+            return agent_pb2.IngestDocumentResponse(ok=False, message="RAG 未启用（COGNITION_RAG_ENABLED=false）")
+        kb_id = f"owner:{owner}"
+        atts = normalize_attachments([request.attachment])
+        try:
+            # 与 Run 前置入库同款 to_thread：同步下载/嵌入不得占 grpc.aio 事件循环。
+            names = await asyncio.to_thread(self.ingest_attachments_fn, atts, kb_id)
+        except Exception as exc:  # noqa: BLE001 — 管理操作失败以 message 上浮，不抛 gRPC 错
+            logger.warning("IngestDocument failed for %s: %s", kb_id, exc)
+            return agent_pb2.IngestDocumentResponse(ok=False, kb_id=kb_id, message=f"入库失败: {exc}")
+        if not names:
+            return agent_pb2.IngestDocumentResponse(
+                ok=False, kb_id=kb_id, message="无可入库文本（仅支持文本/Markdown/CSV/JSON/PDF）"
+            )
+        logger.info("document ingested into %s: %s", kb_id, list(names))
+        return agent_pb2.IngestDocumentResponse(ok=True, kb_id=kb_id)
 
     async def Run(self, request, context):  # noqa: N802 (gRPC 方法名固定)
         run_id = request.run_id or "unknown"

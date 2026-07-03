@@ -10,6 +10,21 @@ option go_package = "my-agent/control-plane/internal/genproto/agent/v1;agentv1";
 // 客户端（Go 控制面）取消 ctx → 该 RPC 被取消（CANCELLED）→ Python 取消图执行。
 service CognitionService {
   rpc Run(RunRequest) returns (stream Event);
+  // —— UX-1 加性扩展（仍 v1）：Files 面板"上传即入库"（不经对话轮）。
+  // 入库必须走认知面：embedding/分块是认知域能力，Go 不持向量化逻辑。
+  // 读/删走 Go 直连 Qdrant REST（纯管理读写，无向量化，见 control-plane/internal/kb）。
+  rpc IngestDocument(IngestDocumentRequest) returns (IngestDocumentResponse);
+}
+
+message IngestDocumentRequest {
+  string owner_id = 1;       // 归属（服务端定 kb=owner:{owner_id}，客户端不可指定 kb）
+  Attachment attachment = 2; // 已上传对象引用（Go 侧已校验 key 归属）
+}
+
+message IngestDocumentResponse {
+  bool ok = 1;
+  string kb_id = 2;
+  string message = 3; // 失败原因/跳过原因（非文本类等）
 }
 
 message RunRequest {

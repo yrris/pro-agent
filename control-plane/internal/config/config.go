@@ -23,6 +23,9 @@ type Config struct {
 	MinioSecretKey string
 	MinioBucket    string
 	MinioUseSSL    bool
+	// UX-1 知识库管理（Files 面板）：Go 直连 Qdrant REST 做纯管理读/删。
+	QdrantURL        string
+	QdrantCollection string
 }
 
 func Load() Config {
@@ -40,6 +43,10 @@ func Load() Config {
 		MinioSecretKey:    env("MINIO_SECRET_KEY", "minioadmin"),
 		MinioBucket:       env("MINIO_BUCKET", "artifacts"), // 须与认知面 COGNITION_MINIO_BUCKET 一致
 		MinioUseSSL:       env("MINIO_USE_SSL", "false") == "true",
+		// 与认知面共用一套 Qdrant：默认接受 COGNITION_QDRANT_URL（deploy/.env 单一事实源），
+		// 也可用 QDRANT_URL 单独覆盖。
+		QdrantURL:        env("QDRANT_URL", env("COGNITION_QDRANT_URL", "http://localhost:6333")),
+		QdrantCollection: env("QDRANT_COLLECTION", "cognition_docs"),
 	}
 }
 

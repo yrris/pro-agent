@@ -19,6 +19,7 @@ services:
       PG_DSN: postgres://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-agent_pwd}@postgres:5432/${POSTGRES_DB:-my_agent}
       COGNITION_ADDR: cognition:50051
       MINIO_ENDPOINT: minio:9000
+      QDRANT_URL: http://qdrant:6333 # UX-1 知识库管理（Files 面板读/删直连）
       WEB_DIR: /app/web
     ports:
       - "${CONTROL_PLANE_PORT:-8080}:8080"

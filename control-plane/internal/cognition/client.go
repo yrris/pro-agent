@@ -43,6 +43,9 @@ type Stream interface {
 // Client 是认知面客户端。
 type Client interface {
 	RunAgent(ctx context.Context, req RunRequest) (Stream, error)
+	// IngestDocument：Files 面板"上传即入库"（UX-1）。入库必须走认知面
+	//（embedding/分块是认知域能力）；ok=false 时 message 携带原因（非文本类等）。
+	IngestDocument(ctx context.Context, ownerID string, att Attachment) (ok bool, kbID, message string, err error)
 	// HealthCheck 探认知面「业务就绪」（标准 grpc.health.v1，非仅通道连通）。
 	HealthCheck(ctx context.Context) error
 	Close() error
@@ -77,6 +80,19 @@ func (c *grpcClient) HealthCheck(ctx context.Context) error {
 		return fmt.Errorf("cognition: not serving (status=%s)", resp.GetStatus())
 	}
 	return nil
+}
+
+func (c *grpcClient) IngestDocument(ctx context.Context, ownerID string, att Attachment) (bool, string, string, error) {
+	resp, err := c.svc.IngestDocument(ctx, &agentv1.IngestDocumentRequest{
+		OwnerId: ownerID,
+		Attachment: &agentv1.Attachment{
+			ResourceKey: att.ResourceKey, FileName: att.FileName, MimeType: att.MimeType, Size: att.Size,
+		},
+	}, grpc.WaitForReady(true))
+	if err != nil {
+		return false, "", "", err
+	}
+	return resp.GetOk(), resp.GetKbId(), resp.GetMessage(), nil
 }
 
 func (c *grpcClient) RunAgent(ctx context.Context, req RunRequest) (Stream, error) {

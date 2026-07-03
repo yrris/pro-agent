@@ -27,9 +27,9 @@ func TestAllowedUpload(t *testing.T) {
 		{"text/markdown; charset=utf-8", "a.md", true}, // 带参数的 MIME
 		{"application/pdf", "a.pdf", true},
 		{"application/json", "a.json", true},
-		{"", "notes.md", true},                          // 空 MIME 扩展名兜底
-		{"application/octet-stream", "data.csv", true},  // 浏览器常见误报
-		{"application/octet-stream", "app.exe", false},  // 可执行拒绝
+		{"", "notes.md", true},                         // 空 MIME 扩展名兜底
+		{"application/octet-stream", "data.csv", true}, // 浏览器常见误报
+		{"application/octet-stream", "app.exe", false}, // 可执行拒绝
 		{"application/zip", "a.zip", false},
 		{"video/mp4", "a.mp4", false},
 		{"application/vnd.openxmlformats-officedocument.wordprocessingml.document", "a.docx", false},
@@ -43,12 +43,12 @@ func TestAllowedUpload(t *testing.T) {
 
 func TestSanitizeUploadFileName(t *testing.T) {
 	cases := map[string]string{
-		"报告 v2.md":            "报告-v2.md",
-		"../../etc/passwd":    "passwd",
-		"a\\b\\c.txt":         "c.txt",
-		"weird*chars?.png":    "weird-chars-.png", // 危险字符逐个转 -（保留扩展名即可）
-		"":                    "file",
-		"...":                 "file",
+		"报告 v2.md":         "报告-v2.md",
+		"../../etc/passwd": "passwd",
+		"a\\b\\c.txt":      "c.txt",
+		"weird*chars?.png": "weird-chars-.png", // 危险字符逐个转 -（保留扩展名即可）
+		"":                 "file",
+		"...":              "file",
 	}
 	for in, want := range cases {
 		if got := api.SanitizeUploadFileName(in); got != want {
@@ -105,7 +105,7 @@ func _multipart(t *testing.T, field, name, mimeType string, data []byte) (*bytes
 func TestUploadHandler(t *testing.T) {
 	arts := &fakeArtifacts{objs: map[string][]byte{}}
 	runs := &fakeRuns{runs: map[string]store.Run{}}
-	router := api.NewRouter(nil, runs, nil, nil, arts, nil, time.Minute, "", discardLogger())
+	router := api.NewRouter(nil, runs, nil, nil, arts, nil, nil, nil, time.Minute, "", discardLogger())
 
 	do := func(body *bytes.Buffer, ct, user string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/uploads?sessionId=s1", body)
@@ -152,7 +152,7 @@ func TestUploadHandler(t *testing.T) {
 
 	// 4) 超大小上限 → 413（MAX_UPLOAD_BYTES 环境变量可配）。
 	t.Setenv("MAX_UPLOAD_BYTES", "10")
-	smallRouter := api.NewRouter(nil, runs, nil, nil, arts, nil, time.Minute, "", discardLogger())
+	smallRouter := api.NewRouter(nil, runs, nil, nil, arts, nil, nil, nil, time.Minute, "", discardLogger())
 	body4, ct4 := _multipart(t, "file", "big.txt", "text/plain", bytes.Repeat([]byte("a"), 1024))
 	req := httptest.NewRequest(http.MethodPost, "/uploads", body4)
 	req.Header.Set("Content-Type", ct4)
@@ -164,7 +164,7 @@ func TestUploadHandler(t *testing.T) {
 	}
 
 	// 5) 存储未配置 → 503。
-	nilRouter := api.NewRouter(nil, runs, nil, nil, nil, nil, time.Minute, "", discardLogger())
+	nilRouter := api.NewRouter(nil, runs, nil, nil, nil, nil, nil, nil, time.Minute, "", discardLogger())
 	body5, ct5 := _multipart(t, "file", "a.txt", "text/plain", []byte("x"))
 	req5 := httptest.NewRequest(http.MethodPost, "/uploads", body5)
 	req5.Header.Set("Content-Type", ct5)

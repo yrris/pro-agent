@@ -18,9 +18,11 @@ import (
 	"github.com/google/uuid"
 
 	"my-agent/control-plane/internal/artifact"
+	"my-agent/control-plane/internal/cognition"
 	"my-agent/control-plane/internal/dispatch"
 	"my-agent/control-plane/internal/event"
 	"my-agent/control-plane/internal/health"
+	"my-agent/control-plane/internal/kb"
 	"my-agent/control-plane/internal/store"
 )
 
@@ -31,6 +33,8 @@ type handlers struct {
 	events         store.EventRepository
 	artifacts      artifact.Store
 	healthChecks   map[string]health.Check
+	kb             kb.Store
+	cog            cognition.Client
 	runTimeout     time.Duration
 	maxUploadBytes int64
 	log            *slog.Logger
@@ -39,10 +43,10 @@ type handlers struct {
 // NewRouter 装配路由与中间件。artifacts 可为 nil（仅 /artifacts 不可用）；
 // sessions 可为 nil（仅 /sessions 不可用）；healthChecks 可为 nil（/healthz 退化为「进程存活即 200」）；
 // webDir 非空时经 NotFound 托管前端静态资源 + SPA 回退（已注册 API 路由优先匹配，零冲突）。
-func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.SessionRepository, events store.EventRepository, artifacts artifact.Store, healthChecks map[string]health.Check, runTimeout time.Duration, webDir string, log *slog.Logger) http.Handler {
+func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.SessionRepository, events store.EventRepository, artifacts artifact.Store, healthChecks map[string]health.Check, kbStore kb.Store, cog cognition.Client, runTimeout time.Duration, webDir string, log *slog.Logger) http.Handler {
 	h := &handlers{
 		dispatcher: d, runs: runs, sessions: sessions, events: events, artifacts: artifacts,
-		healthChecks: healthChecks, runTimeout: runTimeout,
+		healthChecks: healthChecks, kb: kbStore, cog: cog, runTimeout: runTimeout,
 		maxUploadBytes: DefaultMaxUploadBytes, log: log,
 	}
 	if v := os.Getenv("MAX_UPLOAD_BYTES"); v != "" {
@@ -59,6 +63,10 @@ func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.
 	r.Get("/sessions", h.listSessions)
 	r.Get("/sessions/{sessionID}/runs", h.listSessionRuns)
 	r.Post("/uploads", h.upload)
+	// UX-1 Files 面板：用户知识库管理（读/删直连 Qdrant；上传入库走认知面 gRPC）。
+	r.Get("/kb/docs", h.listKbDocs)
+	r.Post("/kb/docs", h.ingestKbDoc)
+	r.Delete("/kb/docs", h.deleteKbDoc)
 	r.Get("/artifacts/*", h.artifact)
 	if webDir != "" {
 		r.NotFound(spaHandler(webDir))

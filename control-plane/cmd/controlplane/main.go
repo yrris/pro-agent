@@ -17,6 +17,7 @@ import (
 	"my-agent/control-plane/internal/config"
 	"my-agent/control-plane/internal/dispatch"
 	"my-agent/control-plane/internal/health"
+	"my-agent/control-plane/internal/kb"
 	"my-agent/control-plane/internal/store"
 	"my-agent/control-plane/internal/stream"
 )
@@ -65,7 +66,12 @@ func main() {
 		"postgres":  func(ctx context.Context) error { return pool.Ping(ctx) },
 		"cognition": client.HealthCheck,
 	}
-	router := api.NewRouter(dispatcher, runs, sessions, events, artStore, healthChecks, cfg.RunTimeout, cfg.WebDir, log)
+	kbStore := kb.NewClient(cfg.QdrantURL, cfg.QdrantCollection)
+	var kbIface kb.Store
+	if kbStore != nil { // *Client(nil) 塞进接口会变成非 nil 接口，路由降级判断失效
+		kbIface = kbStore
+	}
+	router := api.NewRouter(dispatcher, runs, sessions, events, artStore, healthChecks, kbIface, client, cfg.RunTimeout, cfg.WebDir, log)
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: router}
 
