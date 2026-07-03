@@ -57,6 +57,34 @@ function isHtml(mime: string, name: string) {
   return mime === "text/html" || /\.html?$/i.test(name);
 }
 
+// /artifacts 恒需 X-User-Id 头做 owner 校验（api.go），裸 <img src>/<iframe src> 无法携带 →
+// 登入用户必 403。图片/PDF 预览改为带头 fetch 成 blob object URL。
+function useAuthedObjectUrl(url: string, enabled: boolean) {
+  const [objUrl, setObjUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!enabled || !url) {
+      setObjUrl(null);
+      return;
+    }
+    let alive = true;
+    let created: string | null = null;
+    setObjUrl(null);
+    void fetch(url, { headers: { "X-User-Id": getUserId() || "anonymous" } })
+      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(String(r.status)))))
+      .then((b) => {
+        if (!alive) return;
+        created = URL.createObjectURL(b);
+        setObjUrl(created);
+      })
+      .catch(() => alive && setObjUrl(null));
+    return () => {
+      alive = false;
+      if (created) URL.revokeObjectURL(created);
+    };
+  }, [url, enabled]);
+  return objUrl;
+}
+
 function useArtifactText(url: string, enabled: boolean) {
   const [text, setText] = useState<string | null>(null);
   useEffect(() => {
@@ -78,15 +106,29 @@ function FilePreview({ art, text }: { art: ArtifactRef; text: string | null }) {
   const url = `/artifacts/${art.resourceKey}`;
   const mime = art.mimeType || "";
   const name = art.fileName || art.name;
+  const isImg = mime.startsWith("image/");
+  const isPdf = mime === "application/pdf";
+  // 带 X-User-Id 的 blob URL（img/pdf 无法在 src 上带头）。
+  const objUrl = useAuthedObjectUrl(url, !art.missing && (isImg || isPdf));
   if (art.missing) return <div className="p-4 text-sm text-stone-500">文件已删除或不可用</div>;
-  if (mime.startsWith("image/"))
+  if (isImg)
     return (
       <div className="flex h-full items-start justify-center p-3">
-        <img src={url} alt={name} className="max-h-full max-w-full rounded-lg" />
+        {objUrl ? (
+          <img src={objUrl} alt={name} className="max-h-full max-w-full rounded-lg" />
+        ) : (
+          <Skeleton className="h-40 w-40" />
+        )}
       </div>
     );
-  if (mime === "application/pdf")
-    return <iframe src={url} title={name} className="h-full w-full rounded-lg bg-white" />;
+  if (isPdf)
+    return objUrl ? (
+      <iframe src={objUrl} title={name} className="h-full w-full rounded-lg bg-white" />
+    ) : (
+      <div className="p-3">
+        <Skeleton className="h-96 w-full" />
+      </div>
+    );
   if (isTextLike(mime, name)) {
     if (text === null)
       return (

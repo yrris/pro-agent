@@ -100,3 +100,20 @@ func stringIndex(s, sub string) int {
 	}
 	return -1
 }
+
+func TestFreshDeploy404ReturnsEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r) // 集合未建：Qdrant 对 scroll/delete 返回 404
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "docs")
+	// 首次部署列表：空而非报错。
+	docs, err := c.ListDocs(context.Background(), "owner:u1")
+	if err != nil || len(docs) != 0 {
+		t.Fatalf("fresh deploy list should be empty, got %v err=%v", docs, err)
+	}
+	// 删除亦无操作不报错。
+	if err := c.DeleteDoc(context.Background(), "owner:u1", "s1"); err != nil {
+		t.Fatalf("delete on missing collection should no-op, got %v", err)
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -19,9 +20,13 @@ import (
 	"time"
 )
 
+// ErrCollectionMissing：集合尚未创建（Qdrant 404）。首次入库前 scroll 会命中——
+// 属"知识库为空"而非故障，ListDocs 据此返回空列表而非 502。
+var ErrCollectionMissing = errors.New("kb: qdrant collection not found")
+
 // DocInfo 是知识库中一份文档的聚合视图（多个 chunk 点聚合为一行）。
 type DocInfo struct {
-	SourceID  string `json:"sourceId"`  // 入库时的 source_id（上传文件=resource_key）
+	SourceID  string `json:"sourceId"` // 入库时的 source_id（上传文件=resource_key）
 	FileName  string `json:"fileName"`
 	Chunks    int    `json:"chunks"`
 	CreatedAt int64  `json:"createdAt"` // 最早 chunk 的 created（unix 秒）
@@ -130,6 +135,9 @@ func (c *Client) post(ctx context.Context, path string, body any, out any) error
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return ErrCollectionMissing
+	}
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("qdrant %s: HTTP %d", path, resp.StatusCode)
 	}
@@ -151,6 +159,9 @@ func (c *Client) ListDocs(ctx context.Context, kbID string) ([]DocInfo, error) {
 			} `json:"result"`
 		}
 		if err := c.post(ctx, "/collections/"+c.collection+"/points/scroll", ScrollBody(kbID, offset), &resp); err != nil {
+			if errors.Is(err, ErrCollectionMissing) {
+				return []DocInfo{}, nil // 集合未建=知识库为空（首次部署/未入库过）
+			}
 			return nil, err
 		}
 		points = append(points, resp.Result.Points...)
@@ -166,5 +177,9 @@ func (c *Client) ListDocs(ctx context.Context, kbID string) ([]DocInfo, error) {
 // kbID 由调用方从请求者身份推导（owner:{user}），天然不可能删到他人文档。
 func (c *Client) DeleteDoc(ctx context.Context, kbID, sourceID string) error {
 	body := map[string]any{"filter": kbFilter(kbID, sourceID)}
-	return c.post(ctx, "/collections/"+c.collection+"/points/delete?wait=true", body, nil)
+	err := c.post(ctx, "/collections/"+c.collection+"/points/delete?wait=true", body, nil)
+	if errors.Is(err, ErrCollectionMissing) {
+		return nil // 集合不存在=没什么可删
+	}
+	return err
 }

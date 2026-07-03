@@ -154,8 +154,12 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
             logger.warning("IngestDocument failed for %s: %s", kb_id, exc)
             return agent_pb2.IngestDocumentResponse(ok=False, kb_id=kb_id, message=f"入库失败: {exc}")
         if not names:
+            # names=[] 有两因：非文本类（永久，跳过合理）或下载/提取失败（可重试，
+            # build_ingestor 内部吞掉了）——RPC 层无法区分，文案两者都覆盖以免误导。
             return agent_pb2.IngestDocumentResponse(
-                ok=False, kb_id=kb_id, message="无可入库文本（仅支持文本/Markdown/CSV/JSON/PDF）"
+                ok=False,
+                kb_id=kb_id,
+                message="未入库：仅支持文本/Markdown/CSV/JSON/PDF；若确为受支持类型，可能是下载/解析失败，请重试",
             )
         logger.info("document ingested into %s: %s", kb_id, list(names))
         return agent_pb2.IngestDocumentResponse(ok=True, kb_id=kb_id)

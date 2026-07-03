@@ -88,9 +88,13 @@ export function Header({
       <span className="hidden text-xs text-stone-500 sm:inline">多智能体平台</span>
       <div className="ml-auto flex items-center gap-1.5">
         <HealthBadge report={health} />
-        <IconAction label="Files（产物与文件）" active={artifactsOpen} onClick={onToggleArtifacts}>
-          <FolderOpen />
-        </IconAction>
+        {/* Files 面板在 <lg 视口隐藏（右栏 lg:block）→ 开关也仅在 lg 显示，
+            否则窄屏点了高亮却什么都不弹（无效按钮）。 */}
+        <span className="hidden lg:contents">
+          <IconAction label="Files（产物与文件）" active={artifactsOpen} onClick={onToggleArtifacts}>
+            <FolderOpen />
+          </IconAction>
+        </span>
         <span className="px-1 text-sm text-stone-400">👤 {userId}</span>
         <Button variant="ghost" size="sm" onClick={onLogout} className="text-xs text-stone-400">
           退出

@@ -46,7 +46,7 @@ func Load() Config {
 		// 与认知面共用一套 Qdrant：默认接受 COGNITION_QDRANT_URL（deploy/.env 单一事实源），
 		// 也可用 QDRANT_URL 单独覆盖。
 		QdrantURL:        env("QDRANT_URL", env("COGNITION_QDRANT_URL", "http://localhost:6333")),
-		QdrantCollection: env("QDRANT_COLLECTION", "cognition_docs"),
+		QdrantCollection: env("QDRANT_COLLECTION", env("COGNITION_QDRANT_COLLECTION", "cognition_docs")),
 	}
 }
 

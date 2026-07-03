@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Loader2, Paperclip, RotateCw, X } from "lucide-react";
 import { MessageList } from "../components/chat";
 import { FilesPanel } from "../components/FilesPanel";
@@ -257,25 +257,36 @@ export function ChatView({
     [timeline, liveArtifacts],
   );
 
-  // 实时运行中出现新产物 → 自动展开 Files 面板（载入历史/回看不打扰）。
-  const prevCountRef = useRef(0);
+  // 当前 run 产出新产物 → 自动展开 Files 面板。跟踪 live 轮产物数（而非聚合）：
+  // 覆盖"产物随终帧 flush 与 status=done 同批到达"的情形（此时聚合+status 守卫会漏），
+  // 且载入历史只填 timeline 不动 live → 不误触发。
+  const liveCount = liveArtifacts?.length ?? 0;
+  const prevLiveRef = useRef(0);
   useEffect(() => {
-    const n = artifacts.length;
-    if (n > prevCountRef.current && status === "running" && !artifactsOpen) {
+    if (liveCount > prevLiveRef.current && !artifactsOpen) {
       onArtifactsOpenChange(true);
     }
-    prevCountRef.current = n;
-  }, [artifacts.length, status, artifactsOpen, onArtifactsOpenChange]);
+    prevLiveRef.current = liveCount;
+  }, [liveCount, artifactsOpen, onArtifactsOpenChange]);
+
+  // onClose 稳定引用：否则内联箭头每帧重建 → FilesPanel 的 memo 失效、流式期每帧重渲。
+  const closeArtifacts = useCallback(() => onArtifactsOpenChange(false), [onArtifactsOpenChange]);
 
   // 面板宽度拖拽（左缘把手）：pointer 捕获 + 实时回写（App 端 clamp+持久化）。
   const dragRef = useRef<{ startX: number; startW: number } | null>(null);
   const onDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
     dragRef.current = { startX: e.clientX, startW: artifactsWidth };
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   };
   const onDragMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = dragRef.current;
     if (!d) return;
+    if (e.buttons === 0) {
+      // 指针已松开却仍在移动（capture 被 pointercancel 抢走等）→ 结束，勿追踪裸悬停。
+      dragRef.current = null;
+      return;
+    }
     onArtifactsWidthChange(d.startW + (d.startX - e.clientX)); // 向左拖=变宽
   };
   const onDragEnd = () => {
@@ -356,10 +367,12 @@ export function ChatView({
             onPointerDown={onDragStart}
             onPointerMove={onDragMove}
             onPointerUp={onDragEnd}
-            className="hidden w-1 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-primary/50 lg:block"
+            onPointerCancel={onDragEnd}
+            onLostPointerCapture={onDragEnd}
+            className="hidden w-1 shrink-0 touch-none cursor-col-resize bg-border/40 transition-colors select-none hover:bg-primary/50 lg:block"
           />
           <div style={{ width: artifactsWidth }} className="hidden shrink-0 lg:block">
-            <FilesPanel artifacts={artifacts} onClose={() => onArtifactsOpenChange(false)} />
+            <FilesPanel artifacts={artifacts} onClose={closeArtifacts} />
           </div>
         </>
       )}

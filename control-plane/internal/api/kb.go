@@ -10,12 +10,18 @@ package api
 // pro_attachment 引用块续聊展开仍依赖原对象；事件账本/已生成回答不受影响。
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"my-agent/control-plane/internal/cognition"
 )
+
+// 入库 RPC 上限：cognition 宕机时 WaitForReady(true) 会永久阻塞（http.Server 无写超时），
+// 用它把请求钉在有界时间内失败。入库含下载+分块+embedding，给足 90s。
+const kbIngestTimeout = 90 * time.Second
 
 func kbIDOf(r *http.Request) string { return "owner:" + ownerOf(r) }
 
@@ -97,7 +103,9 @@ func (h *handlers) ingestKbDoc(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusForbidden, "forbidden", "文件不属于当前用户："+body.ResourceKey)
 		return
 	}
-	ok, kbID, msg, err := h.cog.IngestDocument(r.Context(), owner, cognition.Attachment{
+	ctx, cancel := context.WithTimeout(r.Context(), kbIngestTimeout)
+	defer cancel()
+	ok, kbID, msg, err := h.cog.IngestDocument(ctx, owner, cognition.Attachment{
 		ResourceKey: body.ResourceKey, FileName: body.FileName, MimeType: body.MimeType, Size: body.Size,
 	})
 	if err != nil {

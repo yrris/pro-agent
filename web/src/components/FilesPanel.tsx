@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Database, FileText, Loader2, RotateCw, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
-import { deleteKbDoc, ingestKbDoc, listKbDocs, uploadFile, type KbDoc } from "../lib/api/client";
+import { deleteKbDoc, downloadArtifact, ingestKbDoc, listKbDocs, uploadFile, type KbDoc } from "../lib/api/client";
 import { ArtifactWorkspace } from "./ArtifactWorkspace";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -135,14 +135,13 @@ function KnowledgePanel() {
               <FileText className="size-4 shrink-0 text-stone-500" />
               <div className="min-w-0 flex-1">
                 {d.downloadUrl ? (
-                  <a
-                    href={d.downloadUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="block truncate text-sm text-stone-200 hover:text-primary"
+                  <button
+                    onClick={() => void downloadArtifact(d.sourceId, d.fileName)}
+                    title="下载原文件"
+                    className="block max-w-full truncate text-left text-sm text-stone-200 hover:text-primary"
                   >
                     {d.fileName}
-                  </a>
+                  </button>
                 ) : (
                   <div className="truncate text-sm text-stone-200">{d.fileName}</div>
                 )}
@@ -211,7 +210,13 @@ export const FilesPanel = memo(function FilesPanel({
         </button>
       </div>
       <div className="min-h-0 flex-1">
-        {tab === "artifacts" ? <ArtifactWorkspace artifacts={artifacts} /> : <KnowledgePanel />}
+        {/* 两页签常挂载、以 hidden 切换：切走再切回不丢 ArtifactWorkspace 的选中项与 KB 列表 */}
+        <div className={tab === "artifacts" ? "h-full" : "hidden"}>
+          <ArtifactWorkspace artifacts={artifacts} />
+        </div>
+        <div className={tab === "kb" ? "h-full" : "hidden"}>
+          <KnowledgePanel />
+        </div>
       </div>
     </div>
   );
