@@ -165,3 +165,36 @@ def test_first_interrupt_payload_shape():
     # 非审批 interrupt（无 approval_id）不误判
     other = SimpleNamespace(tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"x": 1})])])
     assert first_interrupt_payload(other) is None
+
+
+def test_usage_accumulates_across_all_nodes_and_attaches_to_result():
+    """usage 单咽喉：任意节点的 on_chat_model_end 都计入；随终态 RESULT 附带。"""
+    from langchain_core.messages import AIMessage as AIM
+
+    from cognition.events.mapper import EventMapper
+
+    m = EventMapper("run-u")
+    for node, inp, out in [("agent", 100, 20), ("rag_generate", 50, 10), ("planner", 30, 5)]:
+        m.handle({
+            "event": "on_chat_model_end",
+            "name": "model",
+            "metadata": {"langgraph_node": node},
+            "data": {"output": AIM(content="x", usage_metadata={
+                "input_tokens": inp, "output_tokens": out, "total_tokens": inp + out})},
+        })
+    ev = m.plain_result("done")
+    assert ev.result.usage is not None
+    assert ev.result.usage.input_tokens == 180
+    assert ev.result.usage.output_tokens == 35
+    assert ev.result.usage.model_calls == 3
+    # proto 往返
+    proto = ev.to_proto()
+    assert proto.result.usage.input_tokens == 180 and proto.result.usage.model_calls == 3
+
+
+def test_usage_absent_when_no_model_calls():
+    from cognition.events.mapper import EventMapper
+
+    ev = EventMapper("run-z").plain_result("done")
+    assert ev.result.usage is None
+    assert ev.to_proto().result.usage.model_calls == 0  # proto 零值（旧端等价）

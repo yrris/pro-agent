@@ -78,6 +78,12 @@ class EventMapper:
         # task 序号（保证 task 的 message_id 唯一）。
         self._task_no = 0
 
+        # M11：全 run 累计 token 用量（handle() 顶部单咽喉聚合——不分节点，
+        # planner/agent/RAG 子图/summary 的每次模型调用都计入）。
+        self._usage_in = 0
+        self._usage_out = 0
+        self._usage_calls = 0
+
     # —— 内部小工具 ——
     def _next_seq(self) -> int:
         self._seq += 1
@@ -103,6 +109,15 @@ class EventMapper:
         et = event.get("event")
         md = event.get("metadata") or {}
         node = md.get("langgraph_node")
+
+        # —— M11 usage 单咽喉：任何节点的模型调用结束都聚合（per-node 会漏子图）——
+        if et == "on_chat_model_end":
+            out = (event.get("data") or {}).get("output")
+            um = getattr(out, "usage_metadata", None)
+            if um:
+                self._usage_in += int(um.get("input_tokens") or 0)
+                self._usage_out += int(um.get("output_tokens") or 0)
+                self._usage_calls += 1
 
         if et == "on_custom_event":
             name = event.get("name")
@@ -487,6 +502,15 @@ class EventMapper:
         return events
 
     # —— result 构造与终态错误 ——
+    def _usage_payload(self):
+        from cognition.events.schema import UsageInfo
+
+        if self._usage_calls == 0:
+            return None
+        return UsageInfo(
+            input_tokens=self._usage_in, output_tokens=self._usage_out, model_calls=self._usage_calls
+        )
+
     def _make_result(self, text: str, *, message_id: Optional[str] = None) -> Event:
         self._finished = True
         return Event(
@@ -498,7 +522,7 @@ class EventMapper:
             is_final=True,
             finish=True,
             step="result",
-            result=ResultPayload(text=text),
+            result=ResultPayload(text=text, usage=self._usage_payload()),
         )
 
     def error_result(self, message: str) -> Event:
