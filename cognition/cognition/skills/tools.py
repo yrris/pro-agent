@@ -127,7 +127,9 @@ def build_skill_tools(
             summary += f"\nstderr: {result.stderr[:400]}"
         if result.artifacts:
             summary += f"\n登记产物 {len(result.artifacts)} 个。"
-        artifact = result.artifacts[0] if result.artifacts else None
+        # 回传全部产物（此前只回 artifacts[0]，多产物技能如 chart 的 PNG+JSON 会丢件；
+        # EventMapper._coerce_artifacts 本就接受列表）。
+        artifact = list(result.artifacts) if result.artifacts else None
         return (summary, artifact)
 
     catalog_desc = "展开某个 skill 的说明与脚本（渐进式披露）。\n" + catalog(registry.list())

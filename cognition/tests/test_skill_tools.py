@@ -69,7 +69,32 @@ async def test_script_runner_executes_and_registers_artifact(tmp_path):
         }
     )
     # ToolNode 风格：ainvoke(ToolCall) 返回 ToolMessage（content + artifact）。
+    # artifact 为列表（多产物技能不丢件；mapper._coerce_artifacts 原生接受列表）。
     assert "generated result.txt" in msg.content
-    assert msg.artifact is not None
-    assert msg.artifact["file_name"] == "result.txt"
-    assert msg.artifact["download_url"] == "/artifacts/run/call-1/result.txt"
+    assert isinstance(msg.artifact, list) and len(msg.artifact) == 1
+    assert msg.artifact[0]["file_name"] == "result.txt"
+    assert msg.artifact[0]["download_url"] == "/artifacts/run/call-1/result.txt"
+
+
+_GEN2_PY = '''
+import json, os, sys
+out = os.environ.get("SKILL_OUTPUT_DIR", ".")
+for name in ("a.png", "b.json"):
+    with open(os.path.join(out, name), "w") as f:
+        f.write("x")
+print("two files")
+'''
+
+
+async def test_script_runner_returns_all_artifacts(tmp_path):
+    """多产物技能（如 chart 的 PNG+JSON）必须全部回传，不只 artifacts[0]。"""
+    d = _build_skill(tmp_path)
+    (d / "scripts" / "gen2.py").write_text(_GEN2_PY, encoding="utf-8")
+    tools, _ = _tools(tmp_path)
+    msg = await tools["script_runner"].ainvoke(
+        {"args": {"skill": "chart", "script": "gen2.py"},
+         "id": "call-2", "name": "script_runner", "type": "tool_call"}
+    )
+    assert isinstance(msg.artifact, list) and len(msg.artifact) == 2
+    names = {a["file_name"] for a in msg.artifact}
+    assert names == {"a.png", "b.json"}
