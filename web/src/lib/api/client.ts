@@ -136,3 +136,40 @@ export async function healthz(): Promise<HealthReport> {
     return { healthy: false, checks: { network: "unreachable" } };
   }
 }
+
+
+// —— UX-1 Files 面板：用户知识库管理 ——
+
+export interface KbDoc {
+  sourceId: string;
+  fileName: string;
+  chunks: number;
+  createdAt: number; // unix 秒
+  downloadUrl?: string; // uploads 来源附带；脚本灌库来源无
+}
+
+export async function listKbDocs(): Promise<KbDoc[]> {
+  const res = await fetch("/kb/docs", { headers: headers() });
+  if (!res.ok) throw new Error(`listKbDocs failed: ${res.status}`);
+  const data = (await res.json()) as { docs: KbDoc[] };
+  return data.docs ?? [];
+}
+
+export async function deleteKbDoc(sourceId: string): Promise<void> {
+  const res = await fetch(`/kb/docs?source=${encodeURIComponent(sourceId)}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  if (!res.ok) throw new Error(`deleteKbDoc failed: ${res.status}`);
+}
+
+// 面板"上传即入库"（不经对话轮）：先 /uploads 拿引用，再 POST /kb/docs 送认知面入库。
+export async function ingestKbDoc(ref: AttachmentRef): Promise<{ ok: boolean; message?: string }> {
+  const res = await fetch("/kb/docs", {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify(ref),
+  });
+  if (!res.ok) throw new Error(`ingestKbDoc failed: ${res.status}`);
+  return (await res.json()) as { ok: boolean; message?: string };
+}

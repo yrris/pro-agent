@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Loader2, Paperclip, RotateCw, X } from "lucide-react";
 import { MessageList } from "../components/chat";
-import { ArtifactWorkspace } from "../components/ArtifactWorkspace";
+import { FilesPanel } from "../components/FilesPanel";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
 import type { RunStatus, RunTurn } from "../hooks/useRunStream";
 import { AGENT_TYPES, OUTPUT_FORMATS, SAMPLE_QUESTIONS } from "../config";
@@ -359,7 +359,7 @@ export function ChatView({
             className="hidden w-1 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-primary/50 lg:block"
           />
           <div style={{ width: artifactsWidth }} className="hidden shrink-0 lg:block">
-            <ArtifactWorkspace artifacts={artifacts} onClose={() => onArtifactsOpenChange(false)} />
+            <FilesPanel artifacts={artifacts} onClose={() => onArtifactsOpenChange(false)} />
           </div>
         </>
       )}

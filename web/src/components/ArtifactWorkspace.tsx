@@ -153,7 +153,7 @@ export const ArtifactWorkspace = memo(function ArtifactWorkspace({
   onClose,
 }: {
   artifacts: ArtifactRef[];
-  onClose: () => void;
+  onClose?: () => void; // FilesPanel 内嵌时由外层页签栏统一提供关闭
 }) {
   const [active, setActive] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -177,7 +177,7 @@ export const ArtifactWorkspace = memo(function ArtifactWorkspace({
   };
 
   return (
-    <div className="flex h-full flex-col border-l bg-background">
+    <div className="flex h-full flex-col bg-background">
       <div className="flex items-center gap-1.5 border-b px-2 py-2">
         {artifacts.length > 0 ? (
           <Select value={current?.resourceKey ?? ""} onValueChange={setActive}>
@@ -212,9 +212,11 @@ export const ArtifactWorkspace = memo(function ArtifactWorkspace({
             <Download />
           </HeaderIcon>
         )}
-        <HeaderIcon label="关闭" onClick={onClose}>
-          <X />
-        </HeaderIcon>
+        {onClose && (
+          <HeaderIcon label="关闭" onClick={onClose}>
+            <X />
+          </HeaderIcon>
+        )}
       </div>
       {artifacts.length === 0 ? (
         <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-stone-500">
