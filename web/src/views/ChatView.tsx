@@ -4,10 +4,17 @@ import { MessageList } from "../components/chat";
 import { ArtifactWorkspace } from "../components/ArtifactWorkspace";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
 import type { RunStatus, RunTurn } from "../hooks/useRunStream";
-import { SAMPLE_QUESTIONS } from "../config";
+import { OUTPUT_FORMATS, SAMPLE_QUESTIONS } from "../config";
 import { uploadFile, type AttachmentRef } from "../lib/api/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -60,14 +67,17 @@ function Composer({
   placeholder,
   onSubmit,
   uploadSessionId,
+  agentType,
 }: {
   disabled: boolean;
   placeholder: string;
-  onSubmit: (q: string, attachments?: AttachmentRef[]) => void;
+  onSubmit: (q: string, attachments?: AttachmentRef[], outputFormat?: string) => void;
   uploadSessionId: string;
+  agentType: string;
 }) {
   const [text, setText] = useState("");
   const [atts, setAtts] = useState<PendingAttachment[]>([]);
+  const [format, setFormat] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const doUpload = (item: PendingAttachment) => {
@@ -95,7 +105,7 @@ function Composer({
     const q = text.trim();
     if (!q || disabled || uploading) return;
     const refs = atts.filter((a) => a.status === "done" && a.ref).map((a) => a.ref!) ;
-    onSubmit(q, refs.length ? refs : undefined);
+    onSubmit(q, refs.length ? refs : undefined, format || undefined);
     setText("");
     setAtts([]);
   };
@@ -127,7 +137,24 @@ function Composer({
         >
           <Paperclip />
         </Button>
-        {/* M9 座位：输出格式选择器加在发送按钮左侧 */}
+        {/* 输出格式（M9）：仅深度思考/深度研究可选（对齐原项目）；值经 startRun.outputFormat 透传 */}
+        <Select value={format || "free"} onValueChange={(v) => setFormat(v === "free" ? "" : v)}>
+          <SelectTrigger
+            size="sm"
+            disabled={agentType === "react"}
+            title={agentType === "react" ? "快速模式不指定输出格式" : "输出格式"}
+            className="w-24 shrink-0 border-slate-700 bg-slate-900 text-slate-300"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {OUTPUT_FORMATS.map((f) => (
+              <SelectItem key={f.value || "free"} value={f.value || "free"}>
+                {f.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -163,13 +190,15 @@ export function ChatView({
   loadingHistory,
   onSubmit,
   uploadSessionId,
+  agentType,
 }: {
   timeline: RunTurn[];
   live: RunTurn | null;
   status: RunStatus;
   loadingHistory: boolean;
-  onSubmit: (q: string, attachments?: AttachmentRef[]) => void;
+  onSubmit: (q: string, attachments?: AttachmentRef[], outputFormat?: string) => void;
   uploadSessionId: string;
+  agentType: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -245,6 +274,7 @@ export function ChatView({
           placeholder={placeholder}
           onSubmit={onSubmit}
           uploadSessionId={uploadSessionId}
+          agentType={agentType}
         />
       </div>
       <div className="hidden w-96 shrink-0 border-l lg:block">

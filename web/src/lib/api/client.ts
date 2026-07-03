@@ -19,8 +19,9 @@ export interface AttachmentRef {
 export interface StartRunArgs {
   query: string;
   sessionId: string;
-  agentType: string; // "react" | "plan_solve"
+  agentType: string; // "react" | "plan_solve" | "deep_research"
   attachments?: AttachmentRef[];
+  outputFormat?: string; // M9：html/docs/ppt/table（空=自由格式）
 }
 
 export interface RunHandle {

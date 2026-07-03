@@ -92,9 +92,9 @@ export default function App() {
   }, [currentSessionId, agentType]);
 
   const onSubmit = useCallback(
-    async (q: string, attachments?: AttachmentRef[]) => {
+    async (q: string, attachments?: AttachmentRef[], outputFormat?: string) => {
       const sid = ensureSessionId();
-      const runId = await run.start(q, agentType, sid, attachments);
+      const runId = await run.start(q, agentType, sid, attachments, outputFormat);
       if (runId) void refreshSessions(); // run 已落库：标题/runCount/lastActiveAt 即时更新
     },
     [ensureSessionId, agentType, run, refreshSessions],
@@ -138,6 +138,7 @@ export default function App() {
           status={run.status}
           loadingHistory={run.loadingHistory}
           onSubmit={onSubmit}
+          agentType={agentType}
           uploadSessionId={currentSessionId ?? ""}
         />
       </div>
