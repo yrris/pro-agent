@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Paperclip, RotateCw, X } from "lucide-react";
+import { ArrowUp, Loader2, Paperclip, RotateCw, X } from "lucide-react";
 import { MessageList } from "../components/chat";
 import { ArtifactWorkspace } from "../components/ArtifactWorkspace";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
 import type { RunStatus, RunTurn } from "../hooks/useRunStream";
-import { OUTPUT_FORMATS, SAMPLE_QUESTIONS } from "../config";
+import { AGENT_TYPES, OUTPUT_FORMATS, SAMPLE_QUESTIONS } from "../config";
 import { uploadFile, type AttachmentRef } from "../lib/api/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -68,12 +68,14 @@ function Composer({
   onSubmit,
   uploadSessionId,
   agentType,
+  onAgentType,
 }: {
   disabled: boolean;
   placeholder: string;
   onSubmit: (q: string, attachments?: AttachmentRef[], outputFormat?: string) => void;
   uploadSessionId: string;
   agentType: string;
+  onAgentType: (v: string) => void;
 }) {
   const [text, setText] = useState("");
   const [atts, setAtts] = useState<PendingAttachment[]>([]);
@@ -110,51 +112,20 @@ function Composer({
     setAtts([]);
   };
   return (
-    <div className="border-t p-3">
-      <AttachmentChips
-        items={atts}
-        onRemove={(id) => setAtts((xs) => xs.filter((x) => x.id !== id))}
-        onRetry={(id) => {
-          const item = atts.find((x) => x.id === id);
-          if (item) doUpload(item);
-        }}
-      />
-      <div className="flex items-end gap-2">
-        <input
-          ref={fileRef}
-          type="file"
-          multiple
-          accept={ACCEPT}
-          className="hidden"
-          onChange={(e) => onPick(e.target.files)}
-        />
-        <Button
-          variant="ghost"
-          size="icon"
-          title="上传附件（图片进多模态；文本/PDF 自动入个人知识库可检索）"
-          disabled={disabled}
-          onClick={() => fileRef.current?.click()}
-        >
-          <Paperclip />
-        </Button>
-        {/* 输出格式（M9）：仅深度思考/深度研究可选（对齐原项目）；值经 startRun.outputFormat 透传 */}
-        <Select value={format || "free"} onValueChange={(v) => setFormat(v === "free" ? "" : v)}>
-          <SelectTrigger
-            size="sm"
-            disabled={agentType === "react"}
-            title={agentType === "react" ? "快速模式不指定输出格式" : "输出格式"}
-            className="w-24 shrink-0 border-stone-700 bg-stone-900 text-stone-300"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {OUTPUT_FORMATS.map((f) => (
-              <SelectItem key={f.value || "free"} value={f.value || "free"}>
-                {f.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+    <div className="px-4 pb-4">
+      {/* UX-1 胶囊 Composer（对齐 Claude 官网）：圆角卡片内 输入区 + 底部控制行；
+          模式/格式选择器内嵌于此（顶栏精简）。IME Enter 守卫原样保留。 */}
+      <div className="mx-auto max-w-3xl rounded-2xl border bg-card shadow-lg transition-colors focus-within:border-stone-500/60">
+        <div className="px-3 pt-2">
+          <AttachmentChips
+            items={atts}
+            onRemove={(id) => setAtts((xs) => xs.filter((x) => x.id !== id))}
+            onRetry={(id) => {
+              const item = atts.find((x) => x.id === id);
+              if (item) doUpload(item);
+            }}
+          />
+        </div>
         <Textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -171,11 +142,73 @@ function Composer({
           rows={2}
           placeholder={placeholder}
           disabled={disabled}
-          className="min-h-0 flex-1 resize-none"
+          className="min-h-0 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent"
         />
-        <Button onClick={submit} disabled={disabled || uploading} className="rounded-xl px-4">
-          {uploading ? "上传中…" : "发送"}
-        </Button>
+        <div className="flex items-center gap-1 px-2 pb-2">
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            accept={ACCEPT}
+            className="hidden"
+            onChange={(e) => onPick(e.target.files)}
+          />
+          <Button
+            variant="ghost"
+            size="icon"
+            title="上传附件（图片进多模态；文本/PDF 自动入个人知识库可检索）"
+            disabled={disabled}
+            onClick={() => fileRef.current?.click()}
+            className="text-stone-400 hover:text-foreground"
+          >
+            <Paperclip />
+          </Button>
+          {/* 输出格式（M9）：仅深度思考/深度研究可选（对齐原项目）；值经 startRun.outputFormat 透传 */}
+          <Select value={format || "free"} onValueChange={(v) => setFormat(v === "free" ? "" : v)}>
+            <SelectTrigger
+              size="sm"
+              disabled={agentType === "react"}
+              title={agentType === "react" ? "快速模式不指定输出格式" : "输出格式"}
+              className="w-24 shrink-0 border-0 bg-transparent text-stone-400 shadow-none hover:text-foreground"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {OUTPUT_FORMATS.map((f) => (
+                <SelectItem key={f.value || "free"} value={f.value || "free"}>
+                  {f.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="ml-auto flex items-center gap-1.5">
+            <Select value={agentType} onValueChange={onAgentType}>
+              <SelectTrigger
+                size="sm"
+                title="推理模式"
+                className="w-fit border-0 bg-transparent text-stone-400 shadow-none hover:text-foreground"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {AGENT_TYPES.map((a) => (
+                  <SelectItem key={a.value} value={a.value}>
+                    {a.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              onClick={submit}
+              disabled={disabled || uploading}
+              size="icon"
+              title={uploading ? "附件上传中…" : "发送（Enter）"}
+              className="rounded-xl bg-primary text-primary-foreground hover:bg-primary/85"
+            >
+              {uploading ? <Loader2 className="animate-spin" /> : <ArrowUp />}
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -191,6 +224,11 @@ export function ChatView({
   onSubmit,
   uploadSessionId,
   agentType,
+  onAgentType,
+  artifactsOpen,
+  onArtifactsOpenChange,
+  artifactsWidth,
+  onArtifactsWidthChange,
 }: {
   timeline: RunTurn[];
   live: RunTurn | null;
@@ -199,6 +237,11 @@ export function ChatView({
   onSubmit: (q: string, attachments?: AttachmentRef[], outputFormat?: string) => void;
   uploadSessionId: string;
   agentType: string;
+  onAgentType: (v: string) => void;
+  artifactsOpen: boolean;
+  onArtifactsOpenChange: (open: boolean) => void;
+  artifactsWidth: number;
+  onArtifactsWidthChange: (w: number) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -214,6 +257,31 @@ export function ChatView({
     [timeline, liveArtifacts],
   );
 
+  // 实时运行中出现新产物 → 自动展开 Files 面板（载入历史/回看不打扰）。
+  const prevCountRef = useRef(0);
+  useEffect(() => {
+    const n = artifacts.length;
+    if (n > prevCountRef.current && status === "running" && !artifactsOpen) {
+      onArtifactsOpenChange(true);
+    }
+    prevCountRef.current = n;
+  }, [artifacts.length, status, artifactsOpen, onArtifactsOpenChange]);
+
+  // 面板宽度拖拽（左缘把手）：pointer 捕获 + 实时回写（App 端 clamp+持久化）。
+  const dragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const onDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    dragRef.current = { startX: e.clientX, startW: artifactsWidth };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const onDragMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    onArtifactsWidthChange(d.startW + (d.startX - e.clientX)); // 向左拖=变宽
+  };
+  const onDragEnd = () => {
+    dragRef.current = null;
+  };
+
   const composerDisabled = loadingHistory || status === "running";
   const placeholder = loadingHistory
     ? "正在载入历史会话…"
@@ -226,9 +294,10 @@ export function ChatView({
       <div className="flex min-w-0 flex-1 flex-col">
         <div ref={scrollRef} className="flex-1 overflow-auto p-4">
           {empty ? (
-            <div className="mx-auto mt-16 max-w-md text-center">
-              <div className="mb-2 text-2xl">🤖</div>
-              <div className="mb-4 text-stone-400">向平台提问，试试：</div>
+            <div className="mx-auto mt-24 max-w-md text-center">
+              <div className="mb-3 text-3xl text-primary">✳</div>
+              <div className="mb-1 text-xl font-medium text-foreground">有什么可以帮上忙？</div>
+              <div className="mb-5 text-sm text-stone-500">试试：</div>
               <div className="space-y-2">
                 {SAMPLE_QUESTIONS.map((q) => (
                   <Button
@@ -275,11 +344,25 @@ export function ChatView({
           onSubmit={onSubmit}
           uploadSessionId={uploadSessionId}
           agentType={agentType}
+          onAgentType={onAgentType}
         />
       </div>
-      <div className="hidden w-96 shrink-0 border-l lg:block">
-        <ArtifactWorkspace artifacts={artifacts} />
-      </div>
+      {artifactsOpen && (
+        <>
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            title="拖拽调整宽度"
+            onPointerDown={onDragStart}
+            onPointerMove={onDragMove}
+            onPointerUp={onDragEnd}
+            className="hidden w-1 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-primary/50 lg:block"
+          />
+          <div style={{ width: artifactsWidth }} className="hidden shrink-0 lg:block">
+            <ArtifactWorkspace artifacts={artifacts} onClose={() => onArtifactsOpenChange(false)} />
+          </div>
+        </>
+      )}
     </div>
   );
 }

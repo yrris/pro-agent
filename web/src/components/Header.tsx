@@ -1,14 +1,7 @@
-import { AGENT_TYPES } from "../config";
+import { FolderOpen, PanelLeft } from "lucide-react";
 import type { HealthReport } from "../lib/api/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 function HealthBadge({ report }: { report: HealthReport | null }) {
@@ -36,44 +29,69 @@ function HealthBadge({ report }: { report: HealthReport | null }) {
   );
 }
 
+function IconAction({
+  label,
+  active,
+  onClick,
+  children,
+}: {
+  label: string;
+  active?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onClick}
+          aria-label={label}
+          className={active ? "bg-accent text-foreground" : "text-stone-400 hover:text-foreground"}
+        >
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+// UX-1：顶栏精简为「侧栏开关 + 品牌」/「健康 + Files(产物区) + 身份」。
+// 模式/输出格式选择器已内嵌 Composer 胶囊（对齐 Claude 官网布局）。
 export function Header({
-  agentType,
-  onAgentType,
   health,
   userId,
   onLogout,
+  sidebarOpen,
+  onToggleSidebar,
+  artifactsOpen,
+  onToggleArtifacts,
 }: {
-  agentType: string;
-  onAgentType: (v: string) => void;
   health: HealthReport | null;
   userId: string;
   onLogout: () => void;
+  sidebarOpen: boolean;
+  onToggleSidebar: () => void;
+  artifactsOpen: boolean;
+  onToggleArtifacts: () => void;
 }) {
   return (
-    <header className="flex items-center gap-3 border-b px-4 py-3">
+    <header className="flex items-center gap-2 border-b px-3 py-2">
+      <IconAction label={sidebarOpen ? "收起侧边栏" : "展开侧边栏"} onClick={onToggleSidebar}>
+        <PanelLeft />
+      </IconAction>
       <span className="text-lg font-semibold tracking-tight">
         <span className="text-primary">pro</span>-agent
       </span>
       <span className="hidden text-xs text-stone-500 sm:inline">多智能体平台</span>
-      <div className="ml-4 flex items-center gap-2">
-        <span className="text-xs text-stone-500">模式</span>
-        <Select value={agentType} onValueChange={onAgentType}>
-          {/* M9 座位：三档模式（快速/深度思考/深度研究）与输出格式选择器落位于此 */}
-          <SelectTrigger size="sm" className="min-w-28">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {AGENT_TYPES.map((a) => (
-              <SelectItem key={a.value} value={a.value}>
-                {a.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="ml-auto flex items-center gap-3">
+      <div className="ml-auto flex items-center gap-1.5">
         <HealthBadge report={health} />
-        <span className="text-sm text-stone-400">👤 {userId}</span>
+        <IconAction label="Files（产物与文件）" active={artifactsOpen} onClick={onToggleArtifacts}>
+          <FolderOpen />
+        </IconAction>
+        <span className="px-1 text-sm text-stone-400">👤 {userId}</span>
         <Button variant="ghost" size="sm" onClick={onLogout} className="text-xs text-stone-400">
           退出
         </Button>

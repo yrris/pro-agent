@@ -14,6 +14,7 @@ import {
   pruneSessions,
   type SessionMeta,
 } from "./lib/sessions";
+import { loadUiPrefs, saveUiPrefs, clampArtifactsWidth } from "./lib/uiPrefs";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -23,6 +24,14 @@ export default function App() {
   const run = useRunStream();
 
   const [agentType, setAgentType] = useState("react");
+  // UX-1 三栏布局状态：侧栏开合持久化；Artifacts 面板默认关（右上图标开），宽度可拖并记忆。
+  const [prefs] = useState(loadUiPrefs);
+  const [sidebarOpen, setSidebarOpen] = useState(prefs.sidebarOpen);
+  const [artifactsOpen, setArtifactsOpen] = useState(false);
+  const [artifactsWidth, setArtifactsWidth] = useState(prefs.artifactsWidth);
+  useEffect(() => {
+    saveUiPrefs({ sidebarOpen, artifactsWidth });
+  }, [sidebarOpen, artifactsWidth]);
   // 会话列表 = 服务端（权威）+ 本地草稿（未落库新会话）两个状态的纯函数派生，
   // 不再手工同步——任何一侧更新，列表自动重算。
   const [serverSessions, setServerSessions] = useState<ServerSession[]>([]);
@@ -119,19 +128,23 @@ export default function App() {
     <div className="flex h-full flex-col">
       <Toaster position="top-center" />
       <Header
-        agentType={agentType}
-        onAgentType={setAgentType}
         health={health}
         userId={userId}
         onLogout={logout}
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((v) => !v)}
+        artifactsOpen={artifactsOpen}
+        onToggleArtifacts={() => setArtifactsOpen((v) => !v)}
       />
       <div className="flex min-h-0 flex-1">
-        <Sidebar
-          sessions={sessions}
-          currentSessionId={currentSessionId}
-          onNewSession={onNewSession}
-          onSelectSession={(id) => void selectSession(id)}
-        />
+        {sidebarOpen && (
+          <Sidebar
+            sessions={sessions}
+            currentSessionId={currentSessionId}
+            onNewSession={onNewSession}
+            onSelectSession={(id) => void selectSession(id)}
+          />
+        )}
         <ChatView
           timeline={run.timeline}
           live={run.live}
@@ -139,7 +152,12 @@ export default function App() {
           loadingHistory={run.loadingHistory}
           onSubmit={onSubmit}
           agentType={agentType}
+          onAgentType={setAgentType}
           uploadSessionId={currentSessionId ?? ""}
+          artifactsOpen={artifactsOpen}
+          onArtifactsOpenChange={setArtifactsOpen}
+          artifactsWidth={artifactsWidth}
+          onArtifactsWidthChange={(w) => setArtifactsWidth(clampArtifactsWidth(w))}
         />
       </div>
     </div>

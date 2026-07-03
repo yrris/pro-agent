@@ -1,10 +1,20 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
+import { Check, Copy, Download, X } from "lucide-react";
+import { toast } from "sonner";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
 import { downloadArtifact } from "../lib/api/client";
 import { getUserId } from "../lib/identity";
+import { Markdown } from "./common";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 function human(size: number) {
   if (size < 1024) return `${size} B`;
@@ -12,92 +22,218 @@ function human(size: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function FilePreview({ art }: { art: ArtifactRef }) {
-  const url = `/artifacts/${art.resourceKey}`;
-  const mime = art.mimeType || "";
-  if (art.missing) return <div className="p-4 text-sm text-stone-500">文件已删除或不可用</div>;
-  if (mime.startsWith("image/")) return <img src={url} alt={art.name} className="max-h-80 rounded-lg" />;
-  if (mime === "application/pdf") return <iframe src={url} title={art.name} className="h-96 w-full rounded-lg bg-white" />;
-  if (mime.startsWith("text/") || mime.includes("json") || mime.includes("markdown"))
-    return <TextPreview url={url} />;
-  return <div className="p-4 text-sm text-stone-400">该类型（{mime || "未知"}）暂不支持内联预览，请下载查看。</div>;
+// 同名文件分组序号（一次会话多次产出同名报告时，切换器可区分）。纯函数便于测试。
+export function artifactLabels(artifacts: ArtifactRef[]): Map<string, string> {
+  const total = new Map<string, number>();
+  for (const a of artifacts) {
+    const n = a.fileName || a.name;
+    total.set(n, (total.get(n) ?? 0) + 1);
+  }
+  const seen = new Map<string, number>();
+  const out = new Map<string, string>();
+  for (const a of artifacts) {
+    const n = a.fileName || a.name;
+    const idx = (seen.get(n) ?? 0) + 1;
+    seen.set(n, idx);
+    out.set(a.resourceKey, (total.get(n) ?? 1) > 1 ? `${n}（第 ${idx} 份）` : n);
+  }
+  return out;
 }
 
-function TextPreview({ url }: { url: string }) {
+function isTextLike(mime: string, name: string) {
+  return (
+    mime.startsWith("text/") ||
+    mime.includes("json") ||
+    mime.includes("markdown") ||
+    /\.(md|markdown|txt|csv|json|log|html)$/i.test(name)
+  );
+}
+
+function isMarkdown(mime: string, name: string) {
+  return mime.includes("markdown") || /\.(md|markdown)$/i.test(name);
+}
+
+function isHtml(mime: string, name: string) {
+  return mime === "text/html" || /\.html?$/i.test(name);
+}
+
+function useArtifactText(url: string, enabled: boolean) {
   const [text, setText] = useState<string | null>(null);
   useEffect(() => {
+    if (!enabled) return;
     let alive = true;
     setText(null);
     void fetch(url, { headers: { "X-User-Id": getUserId() || "anonymous" } })
       .then((r) => r.text())
-      .then((t) => alive && setText(t.slice(0, 20000)))
+      .then((t) => alive && setText(t.slice(0, 200_000)))
       .catch(() => alive && setText("（预览失败）"));
     return () => {
       alive = false;
     };
-  }, [url]);
-  if (text === null) {
+  }, [url, enabled]);
+  return text;
+}
+
+function FilePreview({ art, text }: { art: ArtifactRef; text: string | null }) {
+  const url = `/artifacts/${art.resourceKey}`;
+  const mime = art.mimeType || "";
+  const name = art.fileName || art.name;
+  if (art.missing) return <div className="p-4 text-sm text-stone-500">文件已删除或不可用</div>;
+  if (mime.startsWith("image/"))
     return (
-      <div className="space-y-2">
-        <Skeleton className="h-4 w-full" />
-        <Skeleton className="h-4 w-5/6" />
-        <Skeleton className="h-4 w-2/3" />
+      <div className="flex h-full items-start justify-center p-3">
+        <img src={url} alt={name} className="max-h-full max-w-full rounded-lg" />
       </div>
     );
+  if (mime === "application/pdf")
+    return <iframe src={url} title={name} className="h-full w-full rounded-lg bg-white" />;
+  if (isTextLike(mime, name)) {
+    if (text === null)
+      return (
+        <div className="space-y-2 p-3">
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-5/6" />
+          <Skeleton className="h-4 w-2/3" />
+        </div>
+      );
+    // 文档级预览美化：markdown 渲染成文档、html 进沙箱 iframe，而不是源码 dump。
+    if (isHtml(mime, name))
+      return <iframe srcDoc={text} title={name} sandbox="" className="h-full w-full rounded-lg bg-white" />;
+    if (isMarkdown(mime, name))
+      return (
+        <div className="h-full overflow-auto p-4">
+          <Markdown>{text}</Markdown>
+        </div>
+      );
+    return (
+      <pre className="h-full overflow-auto whitespace-pre-wrap rounded-lg bg-black/25 p-3 text-xs leading-relaxed text-stone-200">
+        {text}
+      </pre>
+    );
   }
-  return <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-black/30 p-3 text-xs text-stone-200">{text}</pre>;
+  return (
+    <div className="p-4 text-sm text-stone-400">该类型（{mime || "未知"}）暂不支持内联预览，请下载查看。</div>
+  );
+}
+
+function HeaderIcon({
+  label,
+  onClick,
+  disabled,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onClick}
+          disabled={disabled}
+          aria-label={label}
+          className="size-7 text-stone-400 hover:text-foreground"
+        >
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 // memo：ChatView 每个流式帧都会重渲，但 artifacts 数组只在产物变化时换引用，
-// 工作区（含预览 iframe/图片）无关帧不重渲。
-export const ArtifactWorkspace = memo(function ArtifactWorkspace({ artifacts }: { artifacts: ArtifactRef[] }) {
+// 工作区（含预览 iframe/图片）无关帧不重渲。onClose 由父组件 useCallback 稳定。
+export const ArtifactWorkspace = memo(function ArtifactWorkspace({
+  artifacts,
+  onClose,
+}: {
+  artifacts: ArtifactRef[];
+  onClose: () => void;
+}) {
   const [active, setActive] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const current = artifacts.find((a) => a.resourceKey === active) ?? artifacts[artifacts.length - 1];
+  const labels = useMemo(() => artifactLabels(artifacts), [artifacts]);
 
-  if (artifacts.length === 0) {
-    return (
-      <div className="flex h-full items-center justify-center p-6 text-center text-sm text-stone-500">
-        产物工作区
-        <br />
-        运行产出的文件（报告、图表等）会出现在这里，可预览与下载。
-      </div>
-    );
-  }
+  const mime = current?.mimeType || "";
+  const name = current ? current.fileName || current.name : "";
+  const textLike = current ? !current.missing && isTextLike(mime, name) : false;
+  const text = useArtifactText(current ? `/artifacts/${current.resourceKey}` : "", textLike);
+
+  const copy = async () => {
+    if (text == null) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("复制失败");
+    }
+  };
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="border-b p-3 text-sm font-medium text-stone-300">产物工作区 ({artifacts.length})</div>
-      <Tabs value={current?.resourceKey ?? ""} onValueChange={setActive} className="border-b p-3">
-        <TabsList className="h-auto flex-wrap justify-start gap-1 bg-transparent p-0">
-          {artifacts.map((a) => (
-            <TabsTrigger
-              key={a.resourceKey}
-              value={a.resourceKey}
-              className={`rounded-lg border px-2 py-1 text-xs data-[state=active]:border-primary/50 data-[state=active]:bg-primary/10 data-[state=active]:text-primary ${
-                a.missing ? "opacity-50" : ""
-              }`}
-            >
-              {a.fileName || a.name}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
-      {current && (
-        <div className="flex-1 overflow-auto p-3">
-          <div className="mb-2 flex items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-sm text-stone-200">{current.fileName || current.name}</span>
-            <span className="text-xs text-stone-500">{human(current.size)}</span>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => void downloadArtifact(current.resourceKey, current.fileName || current.name)}
-              className="h-auto bg-primary px-2 py-1 text-xs text-primary-foreground hover:bg-primary/85"
-            >
-              下载
-            </Button>
-          </div>
-          <FilePreview art={current} />
+    <div className="flex h-full flex-col border-l bg-background">
+      <div className="flex items-center gap-1.5 border-b px-2 py-2">
+        {artifacts.length > 0 ? (
+          <Select value={current?.resourceKey ?? ""} onValueChange={setActive}>
+            <SelectTrigger size="sm" className="min-w-0 flex-1 border-0 bg-transparent shadow-none">
+              <SelectValue placeholder="选择产物" />
+            </SelectTrigger>
+            <SelectContent>
+              {artifacts.map((a) => (
+                <SelectItem key={a.resourceKey} value={a.resourceKey}>
+                  {labels.get(a.resourceKey)}
+                  {a.missing ? "（不可用）" : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <span className="flex-1 px-1 text-sm text-stone-400">产物</span>
+        )}
+        <span className="shrink-0 text-xs text-stone-500">
+          {artifacts.length > 0 ? `${artifacts.length} 个` : ""}
+        </span>
+        {current && textLike && (
+          <HeaderIcon label={copied ? "已复制" : "复制内容"} onClick={() => void copy()} disabled={text == null}>
+            {copied ? <Check className="text-emerald-400" /> : <Copy />}
+          </HeaderIcon>
+        )}
+        {current && (
+          <HeaderIcon
+            label="下载"
+            onClick={() => void downloadArtifact(current.resourceKey, current.fileName || current.name)}
+          >
+            <Download />
+          </HeaderIcon>
+        )}
+        <HeaderIcon label="关闭" onClick={onClose}>
+          <X />
+        </HeaderIcon>
+      </div>
+      {artifacts.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-stone-500">
+          运行产出的文件（报告、图表等）
+          <br />
+          会出现在这里，可预览与下载。
         </div>
+      ) : (
+        current && (
+          <>
+            <div className="flex items-center gap-2 border-b px-3 py-1.5 text-xs text-stone-500">
+              <span className="min-w-0 flex-1 truncate">{name}</span>
+              <span>{human(current.size)}</span>
+            </div>
+            <div className="min-h-0 flex-1 p-2">
+              <FilePreview art={current} text={textLike ? text : null} />
+            </div>
+          </>
+        )
       )}
     </div>
   );
