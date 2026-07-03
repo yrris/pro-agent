@@ -136,3 +136,43 @@ def test_download_failure_is_deterministic_precondition_failure(tmp_path):
 
     msg = asyncio.run(run())
     assert "输入文件下载失败" in msg.content  # exit=126 stderr 进摘要，脚本未运行
+
+
+def test_data_analysis_skill_real_duckdb(tmp_path):
+    """B3：data-analysis 技能经 LocalRunner 真实执行（duckdb 视图/summary/query）。"""
+    import pytest
+
+    pytest.importorskip("duckdb")
+    from pathlib import Path as _P
+
+    skill_dir = _P(__file__).resolve().parents[1] / "runtime" / "skills"
+    assert (skill_dir / "data-analysis" / "SKILL.md").exists()
+
+    objs = {"uploads/u/s/aa-sales.csv": "类别,金额\n水果,10\n水果,20\n蔬菜,5\n".encode()}
+    reg = SkillRegistry()
+    reg.refresh([str(skill_dir)])
+    tools = {t.name: t for t in build_skill_tools(reg, LocalSubprocessScriptRunner(downloader=objs.__getitem__))}
+
+    async def run(mode_args):
+        return await tools["script_runner"].ainvoke(
+            {"args": {"skill": "data-analysis", "script": "analyze.py",
+                      "input_files": ["sales.csv"], "script_args": mode_args},
+             "id": "da1", "name": "script_runner", "type": "tool_call"},
+            config={"metadata": {"request_id": "r1",
+                                 "attachments": '[{"resource_key":"uploads/u/s/aa-sales.csv","file_name":"sales.csv"}]'}},
+        )
+
+    # summary 模式
+    msg = asyncio.run(run({"files": ["sales.csv"], "mode": "summary"}))
+    assert "已分析 1 个文件" in msg.content
+    names = {a["file_name"] for a in (msg.artifact or [])}
+    assert "analysis.md" in names
+    # query 模式：聚合正确
+    msg2 = asyncio.run(run({"files": ["sales.csv"], "mode": "query",
+                            "sql": 'SELECT 类别, SUM(金额) AS s FROM sales GROUP BY 类别 ORDER BY s DESC'}))
+    assert "SQL 返回 2 行" in msg2.content
+    names2 = {a["file_name"] for a in (msg2.artifact or [])}
+    assert {"analysis.md", "result.csv"} <= names2
+    # 非 SELECT 拒绝
+    msg3 = asyncio.run(run({"files": ["sales.csv"], "mode": "query", "sql": "DROP TABLE sales"}))
+    assert "失败" in msg3.content

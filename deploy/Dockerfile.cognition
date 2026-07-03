@@ -7,7 +7,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 WORKDIR /src/cognition
 # 先装依赖层（锁文件不变则缓存命中）；[tool.uv] package=false → 只装依赖不装项目。
 COPY cognition/pyproject.toml cognition/uv.lock ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --extra skills
 
 COPY cognition/ ./
 COPY proto/ /src/proto/
@@ -23,6 +23,6 @@ RUN mkdir -p cognition/genproto \
  && uv run python -c "import cognition._genproto"
 
 # 技能目录用镜像内绝对路径（宿主 .env 里的相对路径依赖 CWD，容器内不可靠）。
-ENV COGNITION_SKILLS_DIRS='["/src/cognition/examples/skills"]'
+ENV COGNITION_SKILLS_DIRS='["/src/cognition/examples/skills", "/src/cognition/runtime/skills"]'
 EXPOSE 50051
 CMD ["uv", "run", "python", "-m", "cognition.server.grpc_server"]

@@ -50,7 +50,7 @@ services:
       COGNITION_QDRANT_URL: http://qdrant:6333
       MINIO_ENDPOINT: minio:9000
       COGNITION_MINIO_UPLOAD_ENABLED: "true"
-      COGNITION_SKILLS_DIRS: '["/src/cognition/examples/skills"]'
+      COGNITION_SKILLS_DIRS: '["/src/cognition/examples/skills", "/src/cognition/runtime/skills"]'
       COGNITION_SKILL_RUNNER: local # 容器内不做 DinD；真沙箱运行器属后续拓展
       COGNITION_FAKE_MODEL: ${COGNITION_FAKE_MODEL:-0} # shell 变量优先于 .env（冒烟：COGNITION_FAKE_MODEL=1 make stack-up）
     expose:
