@@ -16,9 +16,14 @@ web: ## 启动前端（Vite :5173，代理到 :8080）
 	cd web && npm run dev
 
 check: ## 跑全部测试（Go + Python + 前端纯逻辑）
-	cd control-plane && go test ./...
+	# TEST_PG_DSN 必须指向独立测试库 my_agent_test——集成测试会 TRUNCATE runs/events，
+	# 指向开发库会清空真实对话历史（踩过的坑）。首次：make test-db
+	cd control-plane && TEST_PG_DSN=postgres://agent:agent_pwd@localhost:55432/my_agent_test go test ./...
 	cd cognition && uv run pytest -q
 	cd web && npm run test
+
+test-db: ## 创建独立测试数据库（集成测试专用，防 TRUNCATE 清掉开发库对话历史）
+	docker exec my-agent-postgres psql -U agent -d my_agent -c "CREATE DATABASE my_agent_test" || true
 
 proto-tools: ## 安装 Go 的 protobuf 插件（首次/CI 用）
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
