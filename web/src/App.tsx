@@ -132,12 +132,13 @@ export default function App() {
     [run, refreshSessions],
   );
 
-  // 删除会话：服务端删（若已落库）+ 本地草稿删；删的是当前会话则退回空白态。
+  // 删除会话：总是打服务端删 + 本地草稿删；删的是当前会话则退回空白态。
   const onDeleteSession = useCallback(
     async (id: string) => {
-      const view = sessions.find((s) => s.id === id);
       try {
-        if (!view?.pendingLocal) await deleteSession(id); // 已落库才打服务端
+        // 总是打服务端删除：pendingLocal 是快照派生、可能过期（run 已落库但刷新未到达），
+        // 据它跳过服务端删会让"已删"的会话下次刷新又冒回来。端点对不存在的会话 404-容忍。
+        await deleteSession(id);
       } catch {
         toast.error("删除会话失败");
         return;
@@ -150,7 +151,7 @@ export default function App() {
       void refreshSessions();
       toast.success("已删除会话");
     },
-    [sessions, currentSessionId, run, refreshSessions],
+    [currentSessionId, run, refreshSessions],
   );
 
   const onNewSession = useCallback(() => {

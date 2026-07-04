@@ -62,13 +62,18 @@ def ingest(
     for i, doc in enumerate(docs):
         if isinstance(doc, str):
             text, file_name, source_id = doc, f"doc-{i}", f"doc-{i}"
-        else:
+            dedup_seed = ""
+        if not isinstance(doc, str):
             text = str(doc.get("text", ""))
             file_name = str(doc.get("file_name", f"doc-{i}"))
             source_id = str(doc.get("source_id", file_name))
+            # 内容不确定的来源（如图片 OCR：同图每次转写文本会变）显式给稳定幂等种子
+            # （由调用方按源字节内容寻址），否则用 chunk 文本哈希——见 point_id 计算处。
+            dedup_seed = str(doc.get("dedup_seed", ""))
         for ci, ch in enumerate(split_text(text, size=chunk_size, overlap=overlap)):
             chunks.append(ch)
-            metas.append({"file_name": file_name, "source_id": source_id, "chunk_index": ci})
+            metas.append({"file_name": file_name, "source_id": source_id, "chunk_index": ci,
+                          "dedup_seed": dedup_seed})
 
     if not chunks:
         return 0
@@ -79,7 +84,9 @@ def ingest(
     now = int(time.time())
     points: list[models.PointStruct] = []
     for ch, meta, dv, (s_idx, s_val) in zip(chunks, metas, dense_vecs, sparse_vecs):
-        dk = _dedup_key(ch)
+        # 有稳定种子（图片 OCR 等内容不确定来源）用 种子:chunk 号；否则用 chunk 文本哈希。
+        seed = meta.get("dedup_seed") or ""
+        dk = f"{seed}:{meta['chunk_index']}" if seed else _dedup_key(ch)
         point_id = str(uuid.uuid5(_STABLE_NS, f"{kb_id}|{dk}")) if stable_ids else uuid.uuid4().hex
         points.append(
             models.PointStruct(

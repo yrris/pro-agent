@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   CalendarClock,
   ChartColumn,
@@ -58,6 +58,8 @@ function SessionRow({
   onDelete: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
   return (
     <div
       className={`group relative mb-1 rounded-lg border transition-colors ${
@@ -77,7 +79,8 @@ function SessionRow({
           e.stopPropagation();
           if (!confirming) {
             setConfirming(true);
-            setTimeout(() => setConfirming(false), 3000);
+            if (timerRef.current) clearTimeout(timerRef.current);
+            timerRef.current = setTimeout(() => setConfirming(false), 3000);
             return;
           }
           onDelete();

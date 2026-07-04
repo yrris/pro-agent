@@ -32,7 +32,11 @@ const SIZES = [
   { value: "1536x1024", label: "横向 3:2" },
   { value: "1024x1536", label: "纵向 2:3" },
 ];
-const GEN_SESSION = "生图工作区"; // 专用会话，生成 run 不混进真实对话
+// 每次生成用一个**唯一**会话（前缀 generate:），避免固定 thread 让 checkpoint 无界累积、
+// 且"猫"的历史污染下一次"狗"的生成。前缀让侧栏把它们过滤出普通对话列表（见 sessions.ts）。
+const GEN_SESSION_PREFIX = "generate:";
+const newGenSession = () =>
+  GEN_SESSION_PREFIX + Math.random().toString(36).slice(2) + Date.now().toString(36);
 const PAGE = 40;
 
 function toRef(a: OwnerArtifact): ArtifactRef {
@@ -72,10 +76,13 @@ export function GenerateWorkspace() {
   const [images, setImages] = useState<OwnerArtifact[] | null>(null);
   const [selected, setSelected] = useState<OwnerArtifact | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const previewRef = useRef<string | null>(null);
+  previewRef.current = sourcePreview;
+  useEffect(() => () => { if (previewRef.current) URL.revokeObjectURL(previewRef.current); }, []);
 
   const refresh = () => {
-    void listArtifacts(PAGE)
-      .then((all) => setImages(all.filter((a) => a.mimeType.startsWith("image/"))))
+    void listArtifacts(PAGE, undefined, "image/") // 服务端只取图片（防单页客户端过滤漏更旧的图）
+      .then(setImages)
       .catch(() => setImages([]));
   };
   useEffect(refresh, []);
@@ -85,8 +92,9 @@ export function GenerateWorkspace() {
     if (fileRef.current) fileRef.current.value = "";
     if (!f) return;
     setUploading(true);
+    if (sourcePreview) URL.revokeObjectURL(sourcePreview); // 重选先回收旧预览（#17）
     setSourcePreview(URL.createObjectURL(f));
-    void uploadFileWithProgress(f, GEN_SESSION, () => {})
+    void uploadFileWithProgress(f, newGenSession(), () => {})
       .then((ref) => setSource(ref))
       .catch(() => {
         toast.error("底图上传失败");
@@ -113,7 +121,7 @@ export function GenerateWorkspace() {
     try {
       const { reader } = await startRun({
         query,
-        sessionId: GEN_SESSION,
+        sessionId: newGenSession(), // 每次生成一个新 thread，互不污染（评审#1）
         agentType: "react",
         imageGen: true,
         attachments: source ? [source] : undefined,

@@ -86,3 +86,20 @@ def test_render_page_inlines_generated_image():
     b64 = base64.b64encode(b"\x89PNG\r\n\x1a\nFAKE").decode()
     assert b64 in site
     assert "generated/nope.png" in site  # 不存在的引用原样保留
+
+
+def test_image_ocr_ingest_idempotent_across_text_drift():
+    """评审#8：同图两次入库、OCR 文本漂移，dedup_seed 相同 → 点数不翻倍（内容寻址幂等）。"""
+    from cognition.rag.factory import build_embedder, build_sparse, build_store
+    from cognition.rag.ingest import ingest
+
+    s = Settings(rag_enabled=True, qdrant_url=":memory:", embedding_provider="fake", sparse_provider="fake")
+    store, emb, sp = build_store(s), build_embedder(s), build_sparse(s)
+    seed = "IMGHASH-abc"
+    d1 = {"text": "销售额100万 图A", "file_name": "c.png", "source_id": "r/tc/c.png", "dedup_seed": seed}
+    d2 = {"text": "销售额 100 万元 图A（措辞略变）", "file_name": "c.png", "source_id": "r/tc/c.png", "dedup_seed": seed}
+    ingest([d1], "owner:u", store=store, embedder=emb, sparse=sp, stable_ids=True)
+    c1 = store._c.count(store._col).count
+    ingest([d2], "owner:u", store=store, embedder=emb, sparse=sp, stable_ids=True)
+    c2 = store._c.count(store._col).count
+    assert c1 == c2, f"图片 OCR 漂移导致重复入库：{c1}->{c2}"

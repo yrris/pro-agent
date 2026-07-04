@@ -22,7 +22,9 @@ _SAFE = re.compile(r"[^A-Za-z0-9_.-]")
 
 
 def _safe(seg: str) -> str:
-    return _SAFE.sub("_", seg or "unknown")[:120]
+    out = _SAFE.sub("_", seg or "unknown")[:120]
+    # 中和纯点段（. / ..）：否则 run_generated_dir(".") 会回落到 _BASE（读到别 run 的图）。
+    return out if out.strip(".") else "unknown"
 
 
 def run_generated_dir(run_id: str, *, create: bool = False) -> str:
@@ -33,12 +35,35 @@ def run_generated_dir(run_id: str, *, create: bool = False) -> str:
     return path
 
 
+_MAX_AGE_S = 3600  # 暂存目录保留上限（无 run-end 钩子，就地机会性清理防无界增长）
+
+
+def _sweep_old() -> None:
+    """机会性清理：删掉超龄的 run 暂存目录（best-effort，任何失败都吞掉）。"""
+    try:
+        import time
+
+        now = time.time()
+        for name in os.listdir(_BASE):
+            p = os.path.join(_BASE, name)
+            try:
+                if os.path.isdir(p) and now - os.path.getmtime(p) > _MAX_AGE_S:
+                    import shutil
+
+                    shutil.rmtree(p, ignore_errors=True)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 def stash_generated(run_id: str, file_name: str, data: bytes) -> None:
     """把一张生成图写进该 run 的暂存区（best-effort，失败不抛——不阻断生图主流程）。"""
     try:
         d = run_generated_dir(run_id, create=True)
         with open(os.path.join(d, _safe(file_name)), "wb") as f:
             f.write(data)
+        _sweep_old()  # 顺手清超龄目录（成本极低，只在生图后触发）
     except OSError:
         pass
 

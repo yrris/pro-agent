@@ -492,7 +492,8 @@ func (h *handlers) listArtifacts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	beforeKey := r.URL.Query().Get("beforeKey")
-	items, err := h.artifactList.ListByOwner(r.Context(), ownerOf(r), limit, beforeTS, beforeKey)
+	mimePrefix := r.URL.Query().Get("mime") // 如 image/ —— 服务端过滤，防单页客户端过滤漏更旧
+	items, err := h.artifactList.ListByOwner(r.Context(), ownerOf(r), limit, beforeTS, beforeKey, mimePrefix)
 	if err != nil {
 		h.log.Error("list artifacts failed", "err", err)
 		writeProblem(w, http.StatusInternalServerError, "internal", "产物列表查询失败")

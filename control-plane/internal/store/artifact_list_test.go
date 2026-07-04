@@ -68,7 +68,7 @@ func TestArtifactListByOwner(t *testing.T) {
 	appendArtifactEvent("r3", 1, event.TypeResult, []string{"r3/tc/secret.png"}, 3000)
 
 	repo := store.NewArtifactListRepository(pool)
-	arts, err := repo.ListByOwner(ctx, "u1", 100, 0, "")
+	arts, err := repo.ListByOwner(ctx, "u1", 100, 0, "", "")
 	if err != nil {
 		t.Fatalf("ListByOwner: %v", err)
 	}
@@ -92,17 +92,17 @@ func TestArtifactListByOwner(t *testing.T) {
 		}
 	}
 	// limit 生效。
-	one, _ := repo.ListByOwner(ctx, "u1", 1, 0, "")
+	one, _ := repo.ListByOwner(ctx, "u1", 1, 0, "", "")
 	if len(one) != 1 {
 		t.Fatalf("limit=1 应回 1 个，得 %d", len(one))
 	}
 	// 游标分页（B.11）：以首页末项为游标取下一页，不重不漏。
-	page1, _ := repo.ListByOwner(ctx, "u1", 2, 0, "")
+	page1, _ := repo.ListByOwner(ctx, "u1", 2, 0, "", "")
 	if len(page1) != 2 {
 		t.Fatalf("首页 limit=2 应回 2 个，得 %d", len(page1))
 	}
 	last := page1[len(page1)-1]
-	page2, _ := repo.ListByOwner(ctx, "u1", 2, last.TSUnixMs, last.ResourceKey)
+	page2, _ := repo.ListByOwner(ctx, "u1", 2, last.TSUnixMs, last.ResourceKey, "")
 	if len(page2) != 1 {
 		t.Fatalf("次页应回剩余 1 个，得 %d", len(page2))
 	}

@@ -151,6 +151,10 @@ function Composer({
   const [format, setFormat] = useState("");
   const [imageGen, setImageGen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  // 卸载时回收所有未清的图片预览 object URL（避免切走 Composer 时泄漏）。
+  const attsRef = useRef<PendingAttachment[]>([]);
+  attsRef.current = atts;
+  useEffect(() => () => attsRef.current.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl)), []);
 
   const doUpload = (item: PendingAttachment) => {
     setAtts((xs) => xs.map((x) => (x.id === item.id ? { ...x, status: "uploading", progress: 0 } : x)));
@@ -462,6 +466,10 @@ export function ChatView({
                 </div>
               ))}
               {live && <MessageList state={live.state} query={live.query} attachments={live.attachments} running={status === "running"} onApprovalDecision={onApprovalDecision} />}
+              {live?.failed && status !== "running" && (
+                // 中断/未终态的当前轮：显式标记，否则冻结的部分回答与"完成"无从区分。
+                <div className="mt-1 text-xs text-amber-400">⚠ 已停止，此轮未走到终态，仅展示已产生部分</div>
+              )}
               {loadingHistory && (
                 <div className="mt-3 space-y-2">
                   <div className="text-sm text-stone-500 pulse-dot">● 载入历史会话…</div>

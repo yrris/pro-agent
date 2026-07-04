@@ -366,7 +366,14 @@ def build_ingestor(
                 continue
             if len(text) > MAX_INGEST_CHARS:
                 text = text[:MAX_INGEST_CHARS] + "\n…（超长截断）"
-            docs.append({"text": text, "file_name": fname, "source_id": a["resource_key"]})
+            doc = {"text": text, "file_name": fname, "source_id": a["resource_key"]}
+            if ocr_image:
+                # 图片 OCR 文本每次转写会变——用图片字节内容哈希做稳定幂等种子，
+                # 保证同图重传/重跑原地 upsert，不因文本漂移而重复入库（评审#8）。
+                import hashlib as _hl
+
+                doc["dedup_seed"] = _hl.md5(data).hexdigest()
+            docs.append(doc)
             names.append(fname)
         if docs:
             ingest(docs, kb_id, store=store, embedder=embedder, sparse=sparse, stable_ids=True)

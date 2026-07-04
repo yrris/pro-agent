@@ -32,7 +32,8 @@ type OwnerArtifact struct {
 type ArtifactListRepository interface {
 	// beforeTS/beforeKey 是游标（上一页最后一项的 ts_unix_ms + resource_key）：只返回严格更旧的。
 	// beforeTS<=0 表示首页。用复合 tie-breaker 防同 ts 产物在页边界丢/重。
-	ListByOwner(ctx context.Context, ownerID string, limit int, beforeTS int64, beforeKey string) ([]OwnerArtifact, error)
+	// mimePrefix 非空时服务端按 mime 前缀过滤（如 "image/"）——否则客户端在单页里过滤会漏更旧的图。
+	ListByOwner(ctx context.Context, ownerID string, limit int, beforeTS int64, beforeKey, mimePrefix string) ([]OwnerArtifact, error)
 }
 
 type pgArtifactListRepo struct{ pool *pgxpool.Pool }
@@ -69,15 +70,16 @@ WITH expanded AS (
 )
 SELECT run_id, session_id, resource_key, name, file_name, download_url, preview_url, mime_type, size, ts_unix_ms
   FROM expanded
- WHERE $3 <= 0 OR (ts_unix_ms, resource_key) < ($3, $4)  -- 游标：严格更旧（复合 tie-breaker）
+ WHERE ($3 <= 0 OR (ts_unix_ms, resource_key) < ($3, $4))  -- 游标：严格更旧（复合 tie-breaker）
+   AND ($5 = '' OR mime_type LIKE $5 || '%')                -- mime 前缀过滤（服务端，防单页漏）
  ORDER BY ts_unix_ms DESC, resource_key DESC
  LIMIT $2`
 
-func (r *pgArtifactListRepo) ListByOwner(ctx context.Context, ownerID string, limit int, beforeTS int64, beforeKey string) ([]OwnerArtifact, error) {
+func (r *pgArtifactListRepo) ListByOwner(ctx context.Context, ownerID string, limit int, beforeTS int64, beforeKey, mimePrefix string) ([]OwnerArtifact, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := r.pool.Query(ctx, artifactListSQL, ownerID, limit, beforeTS, beforeKey)
+	rows, err := r.pool.Query(ctx, artifactListSQL, ownerID, limit, beforeTS, beforeKey, mimePrefix)
 	if err != nil {
 		return nil, fmt.Errorf("store: list artifacts: %w", err)
 	}

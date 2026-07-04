@@ -89,11 +89,19 @@ export function uploadFileWithProgress(
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(e.loaded / e.total);
     };
-    xhr.onload = () =>
-      xhr.status >= 200 && xhr.status < 300
-        ? resolve(JSON.parse(xhr.responseText) as AttachmentRef)
-        : reject(new Error(`upload failed: ${xhr.status}`));
+    xhr.onload = () => {
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(`upload failed: ${xhr.status}`));
+        return;
+      }
+      try {
+        resolve(JSON.parse(xhr.responseText) as AttachmentRef); // 坏 JSON 不能逃出 Promise
+      } catch {
+        reject(new Error("upload failed: bad response"));
+      }
+    };
     xhr.onerror = () => reject(new Error("upload failed: network"));
+    xhr.onabort = () => reject(new Error("upload aborted")); // 无此则 abort 后 Promise 永挂
     if (signal) signal.addEventListener("abort", () => xhr.abort());
     xhr.send(fd);
   });
@@ -321,15 +329,18 @@ export interface OwnerArtifact {
 }
 
 // 游标分页（B.11）：before=上一页末项 tsUnixMs，beforeKey=其 resourceKey（防同 ts 页边界丢/重）。
+// mime 前缀（如 "image/"）服务端过滤（生图工作区只要图片，客户端在单页过滤会漏更旧的图）。
 export async function listArtifacts(
   limit = 60,
   cursor?: { beforeTS: number; beforeKey: string },
+  mime?: string,
 ): Promise<OwnerArtifact[]> {
   const q = new URLSearchParams({ limit: String(limit) });
   if (cursor) {
     q.set("before", String(cursor.beforeTS));
     q.set("beforeKey", cursor.beforeKey);
   }
+  if (mime) q.set("mime", mime);
   const res = await fetch(`/artifacts?${q}`, { headers: headers() });
   if (!res.ok) throw new Error(`listArtifacts failed: ${res.status}`);
   const data = (await res.json()) as { artifacts: OwnerArtifact[] };

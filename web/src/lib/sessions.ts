@@ -94,6 +94,9 @@ export interface SessionView {
 // 纯函数核心：合并服务端列表（权威）与本地草稿（补充），按 lastActiveAt 降序。
 // 同 id 以服务端为准——一旦会话有 run 落库，本地草稿条目即被覆盖。
 export function mergeSessions(server: ServerSessionLike[], local: SessionMeta[]): SessionView[] {
+  // 生图工作区的一次性会话（generate: 前缀）不进对话侧栏——它们只是承载生图 run 的容器，
+  // 产物仍在画廊可见。
+  server = server.filter((s) => !s.sessionId.startsWith("generate:"));
   const views: SessionView[] = server.map((s) => ({
     id: s.sessionId,
     title: s.title,
