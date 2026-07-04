@@ -4,9 +4,11 @@ import { useHealth } from "./hooks/useHealth";
 import { useRunStream } from "./hooks/useRunStream";
 import { LoginView } from "./views/LoginView";
 import { ChatView } from "./views/ChatView";
-import { Header } from "./components/Header";
 import { UsageDialog } from "./components/UsageDialog";
 import { Sidebar } from "./components/Sidebar";
+import { KnowledgePanel } from "./components/FilesPanel";
+import { SchedulesPanel } from "./components/SchedulesPanel";
+import { ArtifactsGallery } from "./components/ArtifactsGallery";
 import { listServerSessions, type AttachmentRef, type ServerSession } from "./lib/api/client";
 import {
   createSession,
@@ -15,7 +17,9 @@ import {
   pruneSessions,
   type SessionMeta,
 } from "./lib/sessions";
-import { loadUiPrefs, saveUiPrefs, clampArtifactsWidth } from "./lib/uiPrefs";
+import { loadUiPrefs, saveUiPrefs, clampArtifactsWidth, type NavView } from "./lib/uiPrefs";
+import { Button } from "@/components/ui/button";
+import { PanelLeft } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -25,15 +29,16 @@ export default function App() {
   const run = useRunStream();
 
   const [agentType, setAgentType] = useState("react");
-  // UX-1 三栏布局状态：侧栏开合持久化；Artifacts 面板默认关（右上图标开），宽度可拖并记忆。
+  // 布局状态：侧栏开合/宽度/当前导航视图持久化；Artifacts 右 dock 默认关（生成时自动开）。
   const [prefs] = useState(loadUiPrefs);
   const [sidebarOpen, setSidebarOpen] = useState(prefs.sidebarOpen);
+  const [activeNav, setActiveNav] = useState<NavView>(prefs.activeNav);
   const [artifactsOpen, setArtifactsOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [artifactsWidth, setArtifactsWidth] = useState(prefs.artifactsWidth);
   useEffect(() => {
-    saveUiPrefs({ sidebarOpen, artifactsWidth });
-  }, [sidebarOpen, artifactsWidth]);
+    saveUiPrefs({ sidebarOpen, artifactsWidth, activeNav });
+  }, [sidebarOpen, artifactsWidth, activeNav]);
   // 会话列表 = 服务端（权威）+ 本地草稿（未落库新会话）两个状态的纯函数派生，
   // 不再手工同步——任何一侧更新，列表自动重算。
   const [serverSessions, setServerSessions] = useState<ServerSession[]>([]);
@@ -68,6 +73,7 @@ export default function App() {
   // 可直接继续对话。重复点击同一会话 = 重新载入（失败后的重试入口）。
   const selectSession = useCallback(
     async (id: string) => {
+      setActiveNav("chat"); // 选会话 = 回到对话视图（画廊/知识库里点会话也应切回）
       setCurrentSessionId(id);
       const view = sessions.find((s) => s.id === id);
       if (view?.pendingLocal) {
@@ -122,6 +128,7 @@ export default function App() {
   );
 
   const onNewSession = useCallback(() => {
+    setActiveNav("chat"); // 从画廊/知识库点"新对话"须切回对话视图，否则新会话搁浅在别的视图后
     // 已停在一个空草稿上就复用它，避免连点"新会话"堆积幽灵草稿。
     const currentView = sessions.find((s) => s.id === currentSessionId);
     if (currentView?.pendingLocal) {
@@ -137,44 +144,67 @@ export default function App() {
   if (!isAuthed) return <LoginView onLogin={login} />;
   return (
     <TooltipProvider delayDuration={200}>
-    <div className="flex h-full flex-col">
+    <div className="flex h-full">
       <Toaster position="top-center" />
-      <Header
-        health={health}
-        userId={userId}
-        onLogout={logout}
-        sidebarOpen={sidebarOpen}
-        onToggleSidebar={() => setSidebarOpen((v) => !v)}
-        artifactsOpen={artifactsOpen}
-        onToggleArtifacts={() => setArtifactsOpen((v) => !v)}
-        onOpenUsage={() => setUsageOpen(true)}
-      />
       <UsageDialog open={usageOpen} onOpenChange={setUsageOpen} />
-      <div className="flex min-h-0 flex-1">
-        {sidebarOpen && (
-          <Sidebar
-            sessions={sessions}
-            currentSessionId={currentSessionId}
-            onNewSession={onNewSession}
-            onSelectSession={(id) => void selectSession(id)}
-          />
-        )}
-        <ChatView
-          timeline={run.timeline}
-          live={run.live}
-          status={run.status}
-          loadingHistory={run.loadingHistory}
-          onSubmit={onSubmit}
-          agentType={agentType}
-          onAgentType={setAgentType}
-          uploadSessionId={currentSessionId ?? ""}
-          artifactsOpen={artifactsOpen}
-          onArtifactsOpenChange={setArtifactsOpen}
-          artifactsWidth={artifactsWidth}
-          onArtifactsWidthChange={(w) => setArtifactsWidth(clampArtifactsWidth(w))}
-          onApprovalDecision={onApprovalDecision}
-          onOpenSession={(id) => void selectSession(id)}
+      {sidebarOpen ? (
+        <Sidebar
+          sessions={sessions}
+          currentSessionId={currentSessionId}
+          activeNav={activeNav}
+          onNavChange={setActiveNav}
+          onNewSession={onNewSession}
+          onSelectSession={(id) => void selectSession(id)}
+          onToggleSidebar={() => setSidebarOpen(false)}
+          health={health}
+          userId={userId}
+          onOpenUsage={() => setUsageOpen(true)}
+          onLogout={logout}
         />
+      ) : (
+        // 侧栏收起时留一个悬浮展开钮（否则无处可开）。
+        <div className="absolute left-2 top-2 z-10">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="展开侧边栏"
+            className="size-8 text-stone-400 hover:text-foreground"
+          >
+            <PanelLeft />
+          </Button>
+        </div>
+      )}
+      <div className="flex min-h-0 flex-1 flex-col">
+        {/* ChatView 常挂载（保住流式 DOM/滚动位置），非 chat 视图用 hidden 盖住 */}
+        <div className={activeNav === "chat" ? "flex min-h-0 flex-1" : "hidden"}>
+          <ChatView
+            timeline={run.timeline}
+            live={run.live}
+            status={run.status}
+            loadingHistory={run.loadingHistory}
+            onSubmit={onSubmit}
+            agentType={agentType}
+            onAgentType={setAgentType}
+            uploadSessionId={currentSessionId ?? ""}
+            artifactsOpen={artifactsOpen}
+            onArtifactsOpenChange={setArtifactsOpen}
+            artifactsWidth={artifactsWidth}
+            onArtifactsWidthChange={(w) => setArtifactsWidth(clampArtifactsWidth(w))}
+            onApprovalDecision={onApprovalDecision}
+          />
+        </div>
+        {activeNav === "artifacts" && <ArtifactsGallery onOpenSession={(id) => void selectSession(id)} />}
+        {activeNav === "kb" && (
+          <div className="mx-auto min-h-0 w-full max-w-4xl flex-1">
+            <KnowledgePanel />
+          </div>
+        )}
+        {activeNav === "schedules" && (
+          <div className="mx-auto min-h-0 w-full max-w-4xl flex-1">
+            <SchedulesPanel onOpenSession={(id) => void selectSession(id)} />
+          </div>
+        )}
       </div>
     </div>
     </TooltipProvider>

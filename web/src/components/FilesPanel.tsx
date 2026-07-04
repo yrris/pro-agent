@@ -1,10 +1,9 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { CalendarClock, Database, FileText, Loader2, RotateCw, Trash2, Upload, X } from "lucide-react";
+import { FileText, Loader2, RotateCw, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
 import { deleteKbDoc, downloadArtifact, ingestKbDoc, listKbDocs, uploadFile, type KbDoc } from "../lib/api/client";
 import { ArtifactWorkspace } from "./ArtifactWorkspace";
-import { SchedulesPanel } from "./SchedulesPanel";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -17,9 +16,10 @@ function fmtDate(unixSec: number): string {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-// 知识库页签：owner 级文档列表（跨会话）+ 删除 + 面板内上传即入库。
+// 知识库视图：owner 级文档列表（跨会话）+ 删除 + 面板内上传即入库。
 // 删除语义（对齐业界，UI 里明示）：只影响此后的检索，历史对话与回放不受影响。
-function KnowledgePanel() {
+// 导出：侧栏导航"知识库"整页渲染它（不再是 Files dock 页签）。
+export function KnowledgePanel() {
   const [docs, setDocs] = useState<KbDoc[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -172,47 +172,20 @@ function KnowledgePanel() {
   );
 }
 
-// Files 面板 = 产物（本会话）| 知识库（跨会话）两个页签，右上单一入口开关。
+// Files 右 dock = 当前对话产物（实时"生成即所见"）。知识库/定时已移到侧栏导航整页，
+// 故此 dock 收敛为单一产物视图（无页签），跨会话产物归档在侧栏"产物"画廊。
 export const FilesPanel = memo(function FilesPanel({
   artifacts,
   onClose,
-  onOpenSession,
 }: {
   artifacts: ArtifactRef[];
   onClose: () => void;
-  onOpenSession?: (sessionId: string) => void;
 }) {
-  const [tab, setTab] = useState<"artifacts" | "kb" | "schedules">("artifacts");
   return (
     <div className="flex h-full flex-col border-l bg-background">
-      <div className="flex items-center gap-1 border-b px-2 py-1.5">
-        <button
-          onClick={() => setTab("artifacts")}
-          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-sm transition-colors ${
-            tab === "artifacts" ? "bg-accent text-foreground" : "text-stone-500 hover:text-foreground"
-          }`}
-        >
-          <FileText className="size-3.5" />
-          产物{artifacts.length > 0 ? ` ${artifacts.length}` : ""}
-        </button>
-        <button
-          onClick={() => setTab("kb")}
-          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-sm transition-colors ${
-            tab === "kb" ? "bg-accent text-foreground" : "text-stone-500 hover:text-foreground"
-          }`}
-        >
-          <Database className="size-3.5" />
-          知识库
-        </button>
-        <button
-          onClick={() => setTab("schedules")}
-          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-sm transition-colors ${
-            tab === "schedules" ? "bg-accent text-foreground" : "text-stone-500 hover:text-foreground"
-          }`}
-        >
-          <CalendarClock className="size-3.5" />
-          定时
-        </button>
+      <div className="flex items-center gap-1.5 border-b px-3 py-2">
+        <FileText className="size-3.5 text-stone-400" />
+        <span className="text-sm text-foreground">当前对话产物{artifacts.length > 0 ? ` · ${artifacts.length}` : ""}</span>
         <button
           onClick={onClose}
           aria-label="关闭"
@@ -222,16 +195,7 @@ export const FilesPanel = memo(function FilesPanel({
         </button>
       </div>
       <div className="min-h-0 flex-1">
-        {/* 两页签常挂载、以 hidden 切换：切走再切回不丢 ArtifactWorkspace 的选中项与 KB 列表 */}
-        <div className={tab === "artifacts" ? "h-full" : "hidden"}>
-          <ArtifactWorkspace artifacts={artifacts} />
-        </div>
-        <div className={tab === "kb" ? "h-full" : "hidden"}>
-          <KnowledgePanel />
-        </div>
-        <div className={tab === "schedules" ? "h-full" : "hidden"}>
-          <SchedulesPanel onOpenSession={onOpenSession} />
-        </div>
+        <ArtifactWorkspace artifacts={artifacts} />
       </div>
     </div>
   );

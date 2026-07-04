@@ -14,9 +14,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// OwnerArtifact 是画廊一格：一个去重后的产物 + 它最近一次出现的 run/时间。
+// OwnerArtifact 是画廊一格：一个去重后的产物 + 它最近一次出现的 run/会话/时间。
 type OwnerArtifact struct {
 	RunID       string `json:"runId"`
+	SessionID   string `json:"sessionId"` // 供画廊"打开来源会话"跳转
 	ResourceKey string `json:"resourceKey"`
 	Name        string `json:"name"`
 	FileName    string `json:"fileName"`
@@ -45,6 +46,7 @@ const artifactListSQL = `
 WITH expanded AS (
     SELECT DISTINCT ON (a->>'resourceKey')
            e.run_id,
+           r.session_id,
            a->>'resourceKey' AS resource_key,
            COALESCE(a->>'name', '')        AS name,
            COALESCE(a->>'fileName', '')    AS file_name,
@@ -63,7 +65,7 @@ WITH expanded AS (
        AND (a->>'missing') IS DISTINCT FROM 'true'
      ORDER BY a->>'resourceKey', e.ts_unix_ms DESC
 )
-SELECT run_id, resource_key, name, file_name, download_url, preview_url, mime_type, size, ts_unix_ms
+SELECT run_id, session_id, resource_key, name, file_name, download_url, preview_url, mime_type, size, ts_unix_ms
   FROM expanded
  ORDER BY ts_unix_ms DESC
  LIMIT $2`
@@ -80,7 +82,7 @@ func (r *pgArtifactListRepo) ListByOwner(ctx context.Context, ownerID string, li
 	out := []OwnerArtifact{}
 	for rows.Next() {
 		var a OwnerArtifact
-		if err := rows.Scan(&a.RunID, &a.ResourceKey, &a.Name, &a.FileName,
+		if err := rows.Scan(&a.RunID, &a.SessionID, &a.ResourceKey, &a.Name, &a.FileName,
 			&a.DownloadURL, &a.PreviewURL, &a.MimeType, &a.Size, &a.TSUnixMs); err != nil {
 			return nil, err
 		}

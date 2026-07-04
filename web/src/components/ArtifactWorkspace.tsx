@@ -59,7 +59,7 @@ function isHtml(mime: string, name: string) {
 
 // /artifacts 恒需 X-User-Id 头做 owner 校验（api.go），裸 <img src>/<iframe src> 无法携带 →
 // 登入用户必 403。图片/PDF 预览改为带头 fetch 成 blob object URL。
-function useAuthedObjectUrl(url: string, enabled: boolean) {
+export function useAuthedObjectUrl(url: string, enabled: boolean) {
   const [objUrl, setObjUrl] = useState<string | null>(null);
   useEffect(() => {
     if (!enabled || !url) {

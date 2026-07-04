@@ -3,9 +3,14 @@
 
 const KEY = "my-agent.ui";
 
+// 左侧栏导航项 = 主区视图路由（对齐 Claude 官网侧栏导航）。
+export type NavView = "chat" | "artifacts" | "kb" | "schedules";
+const NAV_VIEWS: NavView[] = ["chat", "artifacts", "kb", "schedules"];
+
 export interface UiPrefs {
   sidebarOpen: boolean;
   artifactsWidth: number;
+  activeNav: NavView;
 }
 
 export const ARTIFACTS_MIN_W = 320;
@@ -16,7 +21,7 @@ export function clampArtifactsWidth(w: number): number {
   return Math.min(ARTIFACTS_MAX_W, Math.max(ARTIFACTS_MIN_W, Math.round(w)));
 }
 
-const DEFAULTS: UiPrefs = { sidebarOpen: true, artifactsWidth: 384 };
+const DEFAULTS: UiPrefs = { sidebarOpen: true, artifactsWidth: 384, activeNav: "chat" };
 
 export function loadUiPrefs(): UiPrefs {
   try {
@@ -26,6 +31,7 @@ export function loadUiPrefs(): UiPrefs {
     return {
       sidebarOpen: typeof parsed.sidebarOpen === "boolean" ? parsed.sidebarOpen : DEFAULTS.sidebarOpen,
       artifactsWidth: clampArtifactsWidth(parsed.artifactsWidth ?? DEFAULTS.artifactsWidth),
+      activeNav: NAV_VIEWS.includes(parsed.activeNav as NavView) ? (parsed.activeNav as NavView) : "chat",
     };
   } catch {
     return { ...DEFAULTS };

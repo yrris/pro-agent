@@ -82,6 +82,9 @@ func TestArtifactListByOwner(t *testing.T) {
 	if arts[0].ResourceKey != "r2/tc/img-c.png" {
 		t.Fatalf("最新应在首位，得 %v", keys)
 	}
+	if arts[0].SessionID != "s-r2" {
+		t.Fatalf("应带来源 session_id，得 %q", arts[0].SessionID)
+	}
 	for _, k := range keys {
 		if k == "r3/tc/secret.png" {
 			t.Fatal("他人产物泄漏")

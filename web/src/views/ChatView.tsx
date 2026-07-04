@@ -230,7 +230,6 @@ export function ChatView({
   artifactsWidth,
   onArtifactsWidthChange,
   onApprovalDecision,
-  onOpenSession,
 }: {
   timeline: RunTurn[];
   live: RunTurn | null;
@@ -250,7 +249,6 @@ export function ChatView({
     approved: boolean,
     comment?: string,
   ) => Promise<boolean> | void;
-  onOpenSession?: (sessionId: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -386,7 +384,7 @@ export function ChatView({
             className="hidden w-1 shrink-0 touch-none cursor-col-resize bg-border/40 transition-colors select-none hover:bg-primary/50 lg:block"
           />
           <div style={{ width: artifactsWidth }} className="hidden shrink-0 lg:block">
-            <FilesPanel artifacts={artifacts} onClose={closeArtifacts} onOpenSession={onOpenSession} />
+            <FilesPanel artifacts={artifacts} onClose={closeArtifacts} />
           </div>
         </>
       )}

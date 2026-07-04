@@ -271,6 +271,7 @@ export async function toggleSchedule(id: string, enabled: boolean): Promise<void
 
 export interface OwnerArtifact {
   runId: string;
+  sessionId: string;
   resourceKey: string;
   name: string;
   fileName: string;
