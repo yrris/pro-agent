@@ -26,7 +26,7 @@ interface PendingAttachment {
   ref?: AttachmentRef;
 }
 
-const ACCEPT = ".png,.jpg,.jpeg,.webp,.gif,.txt,.md,.markdown,.csv,.json,.xml,.yaml,.yml,.log,.pdf";
+const ACCEPT = ".png,.jpg,.jpeg,.webp,.gif,.txt,.md,.markdown,.csv,.json,.xml,.yaml,.yml,.log,.pdf,.docx,.xlsx";
 
 function AttachmentChips({
   items,

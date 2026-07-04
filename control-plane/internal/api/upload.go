@@ -25,6 +25,9 @@ var allowedExactMIME = map[string]bool{
 	"image/png": true, "image/jpeg": true, "image/webp": true, "image/gif": true,
 	"application/pdf": true, "application/json": true, "application/x-ndjson": true,
 	"application/xml": true,
+	// M12：office 文档（认知面已支持 docx/xlsx 文本提取入库）。
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":       true,
 }
 
 // 扩展名兜底（浏览器对 md/csv 等的 MIME 报告不稳定，常给 application/octet-stream 或空）。
@@ -32,9 +35,10 @@ var allowedExt = map[string]bool{
 	".txt": true, ".md": true, ".markdown": true, ".csv": true, ".json": true,
 	".log": true, ".xml": true, ".yaml": true, ".yml": true, ".pdf": true,
 	".png": true, ".jpg": true, ".jpeg": true, ".webp": true, ".gif": true,
+	".docx": true, ".xlsx": true,
 }
 
-// AllowedUpload 判定 MIME/扩展名是否在白名单（docx/xlsx/可执行等一律拒）。
+// AllowedUpload 判定 MIME/扩展名是否在白名单（可执行等一律拒；docx/xlsx 自 M12 起放行）。
 func AllowedUpload(mimeType, fileName string) bool {
 	mt := strings.ToLower(strings.TrimSpace(strings.SplitN(mimeType, ";", 2)[0]))
 	if strings.HasPrefix(mt, "text/") || allowedExactMIME[mt] {

@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-const KB_ACCEPT = ".txt,.md,.markdown,.csv,.json,.xml,.yaml,.yml,.log,.pdf";
+const KB_ACCEPT = ".txt,.md,.markdown,.csv,.json,.xml,.yaml,.yml,.log,.pdf,.docx,.xlsx";
 
 function fmtDate(unixSec: number): string {
   if (!unixSec) return "";

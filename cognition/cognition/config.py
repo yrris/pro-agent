@@ -175,6 +175,13 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("COGNITION_LANGFUSE_HOST", "LANGFUSE_HOST"),
     )
 
+    # —— M12 工具缺口 ——
+    # web_fetch：抓公开网页（SSRF 服务端封禁私网）；关掉则不注册。
+    web_fetch_enabled: bool = Field(default=True)
+    # code_interpreter：任意 Python 沙箱执行。运行形态随 skill_runner（local/docker）；
+    # 生产建议 docker + 列入 approval_tools（这是任意代码执行原语）。
+    code_interpreter_enabled: bool = Field(default=True)
+
     # —— 图像生成（M9 线 B：provider 抽象可切换，国产便宜模型优先）——
     # 空串=不注册 image_generate 工具（镜像 rag_enabled 门控先例）；fake 供测试/离线。
     image_gen_provider: str = Field(

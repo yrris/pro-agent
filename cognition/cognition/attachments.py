@@ -169,6 +169,18 @@ def is_text_like(mime: str, file_name: str = "") -> bool:
     return any(name.endswith(ext) for ext in _TEXT_EXTS)
 
 
+_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def is_docx(mime: str, file_name: str = "") -> bool:
+    return mime == _DOCX_MIME or file_name.lower().endswith(".docx")
+
+
+def is_xlsx(mime: str, file_name: str = "") -> bool:
+    return mime == _XLSX_MIME or file_name.lower().endswith(".xlsx")
+
+
 def is_pdf(mime: str, file_name: str = "") -> bool:
     return (mime or "").lower() == PDF_MIME or (file_name or "").lower().endswith(".pdf")
 
@@ -187,6 +199,43 @@ def extract_text(data: bytes, mime: str, file_name: str = "") -> Optional[str]:
             return text or None
         except Exception as exc:  # noqa: BLE001 — pdf 解析失败降级跳过
             logger.warning("pdf text extract failed for %s: %s", file_name, exc)
+            return None
+    if is_docx(mime, file_name):
+        try:
+            import io
+
+            from docx import Document  # 惰性：python-docx
+
+            doc = Document(io.BytesIO(data))
+            parts = [p.text for p in doc.paragraphs if p.text.strip()]
+            for table in doc.tables:  # 表格逐行拼为管道分隔文本
+                for row in table.rows:
+                    cells = [c.text.strip() for c in row.cells]
+                    if any(cells):
+                        parts.append(" | ".join(cells))
+            text = "\n".join(parts).strip()
+            return text or None
+        except Exception as exc:  # noqa: BLE001 — 解析失败降级跳过
+            logger.warning("docx text extract failed for %s: %s", file_name, exc)
+            return None
+    if is_xlsx(mime, file_name):
+        try:
+            import io
+
+            from openpyxl import load_workbook  # 惰性：openpyxl
+
+            wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+            parts: list[str] = []
+            for ws in wb.worksheets:
+                parts.append(f"# 工作表: {ws.title}")
+                for row in ws.iter_rows(values_only=True):
+                    cells = ["" if v is None else str(v) for v in row]
+                    if any(c.strip() for c in cells):
+                        parts.append(",".join(cells))  # CSV 形态：DuckDB/检索都友好
+            text = "\n".join(parts).strip()
+            return text or None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("xlsx text extract failed for %s: %s", file_name, exc)
             return None
     if is_text_like(mime, file_name):
         try:
@@ -228,7 +277,7 @@ def build_ingestor(
         names: list[str] = []
         for a in attachments or []:
             mime, fname = a.get("mime_type", ""), a.get("file_name", "")
-            if not (is_text_like(mime, fname) or is_pdf(mime, fname)):
+            if not (is_text_like(mime, fname) or is_pdf(mime, fname) or is_docx(mime, fname) or is_xlsx(mime, fname)):
                 continue  # 图片等非文本：走多模态/占位路径，不进知识库
             try:
                 data = dl(a["resource_key"])

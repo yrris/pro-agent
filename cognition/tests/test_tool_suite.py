@@ -40,7 +40,7 @@ async def test_suite_aggregates_local_and_skill(tmp_path):
 async def test_suite_defaults_local_only():
     settings = Settings(mcp_servers={}, skills_dirs=[], minio_upload_enabled=False)
     tools, provider_map, closers = await build_tool_suite(settings)
-    assert {t.name for t in tools} == {"calculator", "write_report"}
+    assert {t.name for t in tools} == {"calculator", "write_report", "web_fetch", "code_interpreter"}  # M12 起默认含二者
     assert set(provider_map.values()) == {"local"}
     assert closers == []
 

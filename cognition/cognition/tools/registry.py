@@ -80,6 +80,16 @@ async def build_tool_suite(
 
         tools.append(build_image_generate_tool(build_image_provider(settings), settings))
 
+    # —— M12：web_fetch（默认开，SSRF 服务端封禁）与 code_interpreter（沙箱执行）——
+    if getattr(settings, "web_fetch_enabled", True):
+        from cognition.tools.web_fetch import build_web_fetch_tool
+
+        tools.append(build_web_fetch_tool())
+    if getattr(settings, "code_interpreter_enabled", True):
+        from cognition.tools.code_interpreter import build_code_interpreter_tool
+
+        tools.append(build_code_interpreter_tool(settings))
+
     # —— Skill：扫描 SKILL.md + 构建工具 ——
     if settings.skills_enabled and settings.skills_dirs:
         from cognition.skills.registry import SkillRegistry
