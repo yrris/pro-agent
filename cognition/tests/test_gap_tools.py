@@ -146,3 +146,20 @@ def test_new_skills_load_and_render_page():
     msg = asyncio.run(run())
     assert "已生成 site.html" in msg.content
     assert msg.artifact and msg.artifact[0]["file_name"] == "site.html"
+
+
+def test_code_interpreter_env_isolation():
+    """密钥隔离：用户代码读不到认知面进程的 API key 等环境变量。"""
+    import os
+
+    os.environ["FAKE_SECRET_FOR_TEST"] = "leak-me"
+    try:
+        msg = asyncio.run(_run_ci(
+            "import os\n"
+            "print('SECRET=' + os.environ.get('FAKE_SECRET_FOR_TEST', 'ABSENT'))\n"
+            "print('KEYS=' + str(sorted(k for k in os.environ if 'KEY' in k or 'SECRET' in k)))\n"
+        ))
+    finally:
+        del os.environ["FAKE_SECRET_FOR_TEST"]
+    assert "SECRET=ABSENT" in msg.content  # 不继承任意变量
+    assert "leak-me" not in msg.content

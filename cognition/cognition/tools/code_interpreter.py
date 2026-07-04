@@ -73,8 +73,16 @@ def build_code_interpreter_tool(settings: Settings) -> BaseTool:
             ]
             env = None
         else:
+            # 最小化环境：绝不继承进程全量 env——认知面进程持有 LLM/MinIO 等密钥，
+            # 任意用户代码 os.environ 一读就泄漏。只给解释器运转所需的白名单变量。
+            env = {
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                "HOME": out_dir,  # 家目录指向产物目录（pip/matplotlib 等的缓存落这里）
+                "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+                "SKILL_OUTPUT_DIR": out_dir,
+                "MPLCONFIGDIR": out_dir,
+            }
             argv = [sys.executable, str(script)]
-            env = {**os.environ, "SKILL_OUTPUT_DIR": out_dir, "MPLCONFIGDIR": out_dir}
 
         try:
             proc = await asyncio.create_subprocess_exec(
