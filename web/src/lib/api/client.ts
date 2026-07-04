@@ -320,8 +320,17 @@ export interface OwnerArtifact {
   tsUnixMs: number;
 }
 
-export async function listArtifacts(limit = 100): Promise<OwnerArtifact[]> {
-  const res = await fetch(`/artifacts?limit=${limit}`, { headers: headers() });
+// 游标分页（B.11）：before=上一页末项 tsUnixMs，beforeKey=其 resourceKey（防同 ts 页边界丢/重）。
+export async function listArtifacts(
+  limit = 60,
+  cursor?: { beforeTS: number; beforeKey: string },
+): Promise<OwnerArtifact[]> {
+  const q = new URLSearchParams({ limit: String(limit) });
+  if (cursor) {
+    q.set("before", String(cursor.beforeTS));
+    q.set("beforeKey", cursor.beforeKey);
+  }
+  const res = await fetch(`/artifacts?${q}`, { headers: headers() });
   if (!res.ok) throw new Error(`listArtifacts failed: ${res.status}`);
   const data = (await res.json()) as { artifacts: OwnerArtifact[] };
   return data.artifacts ?? [];

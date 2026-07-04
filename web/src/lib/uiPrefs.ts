@@ -4,8 +4,8 @@
 const KEY = "my-agent.ui";
 
 // 左侧栏导航项 = 主区视图路由（对齐 Claude 官网侧栏导航）。
-export type NavView = "chat" | "artifacts" | "kb" | "schedules";
-const NAV_VIEWS: NavView[] = ["chat", "artifacts", "kb", "schedules"];
+export type NavView = "chat" | "generate" | "artifacts" | "kb" | "schedules";
+const NAV_VIEWS: NavView[] = ["chat", "generate", "artifacts", "kb", "schedules"];
 
 export interface UiPrefs {
   sidebarOpen: boolean;

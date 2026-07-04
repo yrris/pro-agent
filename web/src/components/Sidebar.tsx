@@ -5,6 +5,7 @@ import {
   Database,
   FolderOpen,
   LogOut,
+  ImagePlus,
   MessageSquare,
   PanelLeft,
   Plus,
@@ -162,6 +163,7 @@ export function Sidebar({
           新对话
         </Button>
         <NavItem icon={<MessageSquare className="size-4" />} label="对话" active={activeNav === "chat"} onClick={() => onNavChange("chat")} />
+        <NavItem icon={<ImagePlus className="size-4" />} label="生图" active={activeNav === "generate"} onClick={() => onNavChange("generate")} />
         <NavItem icon={<FolderOpen className="size-4" />} label="产物" active={activeNav === "artifacts"} onClick={() => onNavChange("artifacts")} />
         <NavItem icon={<Database className="size-4" />} label="知识库" active={activeNav === "kb"} onClick={() => onNavChange("kb")} />
         <NavItem icon={<CalendarClock className="size-4" />} label="定时任务" active={activeNav === "schedules"} onClick={() => onNavChange("schedules")} />

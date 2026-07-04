@@ -54,19 +54,41 @@ function Thumb({ art }: { art: OwnerArtifact }) {
   );
 }
 
+const PAGE = 60;
+
 export function ArtifactsGallery({ onOpenSession }: { onOpenSession?: (sessionId: string) => void }) {
   const [items, setItems] = useState<OwnerArtifact[] | null>(null);
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<"all" | "image" | "doc">("all");
   const [selected, setSelected] = useState<OwnerArtifact | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
 
   const refresh = () => {
     setItems(null);
-    void listArtifacts(200)
-      .then(setItems)
+    setHasMore(false);
+    void listArtifacts(PAGE)
+      .then((first) => {
+        setItems(first);
+        setHasMore(first.length === PAGE); // 满页→可能还有下一页
+      })
       .catch(() => setItems([]));
   };
   useEffect(refresh, []);
+
+  // 加载下一页：以当前末项为游标（tsUnixMs + resourceKey），追加不重。
+  const loadMore = () => {
+    if (loadingMore || !items || items.length === 0) return;
+    const last = items[items.length - 1];
+    setLoadingMore(true);
+    void listArtifacts(PAGE, { beforeTS: last.tsUnixMs, beforeKey: last.resourceKey })
+      .then((next) => {
+        setItems((cur) => [...(cur ?? []), ...next]);
+        setHasMore(next.length === PAGE);
+      })
+      .catch(() => setHasMore(false))
+      .finally(() => setLoadingMore(false));
+  };
 
   const filtered = useMemo(() => {
     const list = items ?? [];
@@ -151,6 +173,13 @@ export function ArtifactsGallery({ onOpenSession }: { onOpenSession?: (sessionId
                 </button>
               ))}
             </div>
+            {hasMore && (
+              <div className="mt-4 flex justify-center">
+                <Button variant="outline" size="sm" disabled={loadingMore} onClick={loadMore}>
+                  {loadingMore ? "加载中…" : "加载更多"}
+                </Button>
+              </div>
+            )}
           </div>
         </ScrollArea>
       </div>

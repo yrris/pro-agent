@@ -9,6 +9,7 @@ import { Sidebar } from "./components/Sidebar";
 import { KnowledgePanel } from "./components/FilesPanel";
 import { SchedulesPanel } from "./components/SchedulesPanel";
 import { ArtifactsGallery } from "./components/ArtifactsGallery";
+import { GenerateWorkspace } from "./components/GenerateWorkspace";
 import { deleteSession, listServerSessions, type AttachmentRef, type ServerSession } from "./lib/api/client";
 import {
   createSession,
@@ -222,6 +223,7 @@ export default function App() {
             onStop={run.stop}
           />
         </div>
+        {activeNav === "generate" && <GenerateWorkspace />}
         {activeNav === "artifacts" && <ArtifactsGallery onOpenSession={(id) => void selectSession(id)} />}
         {activeNav === "kb" && (
           <div className="mx-auto min-h-0 w-full max-w-4xl flex-1">

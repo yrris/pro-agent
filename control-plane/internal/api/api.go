@@ -484,7 +484,15 @@ func (h *handlers) listArtifacts(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	items, err := h.artifactList.ListByOwner(r.Context(), ownerOf(r), limit)
+	// 游标分页（B.11）：?before=<ts_unix_ms>&beforeKey=<resourceKey>（上一页末项）。
+	var beforeTS int64
+	if v := r.URL.Query().Get("before"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			beforeTS = n
+		}
+	}
+	beforeKey := r.URL.Query().Get("beforeKey")
+	items, err := h.artifactList.ListByOwner(r.Context(), ownerOf(r), limit, beforeTS, beforeKey)
 	if err != nil {
 		h.log.Error("list artifacts failed", "err", err)
 		writeProblem(w, http.StatusInternalServerError, "internal", "产物列表查询失败")

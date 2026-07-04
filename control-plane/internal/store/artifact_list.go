@@ -30,7 +30,9 @@ type OwnerArtifact struct {
 
 // ArtifactListRepository 是产物画廊的只读端口。
 type ArtifactListRepository interface {
-	ListByOwner(ctx context.Context, ownerID string, limit int) ([]OwnerArtifact, error)
+	// beforeTS/beforeKey 是游标（上一页最后一项的 ts_unix_ms + resource_key）：只返回严格更旧的。
+	// beforeTS<=0 表示首页。用复合 tie-breaker 防同 ts 产物在页边界丢/重。
+	ListByOwner(ctx context.Context, ownerID string, limit int, beforeTS int64, beforeKey string) ([]OwnerArtifact, error)
 }
 
 type pgArtifactListRepo struct{ pool *pgxpool.Pool }
@@ -67,14 +69,15 @@ WITH expanded AS (
 )
 SELECT run_id, session_id, resource_key, name, file_name, download_url, preview_url, mime_type, size, ts_unix_ms
   FROM expanded
- ORDER BY ts_unix_ms DESC
+ WHERE $3 <= 0 OR (ts_unix_ms, resource_key) < ($3, $4)  -- 游标：严格更旧（复合 tie-breaker）
+ ORDER BY ts_unix_ms DESC, resource_key DESC
  LIMIT $2`
 
-func (r *pgArtifactListRepo) ListByOwner(ctx context.Context, ownerID string, limit int) ([]OwnerArtifact, error) {
+func (r *pgArtifactListRepo) ListByOwner(ctx context.Context, ownerID string, limit int, beforeTS int64, beforeKey string) ([]OwnerArtifact, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := r.pool.Query(ctx, artifactListSQL, ownerID, limit)
+	rows, err := r.pool.Query(ctx, artifactListSQL, ownerID, limit, beforeTS, beforeKey)
 	if err != nil {
 		return nil, fmt.Errorf("store: list artifacts: %w", err)
 	}
