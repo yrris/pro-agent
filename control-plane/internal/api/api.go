@@ -36,6 +36,7 @@ type handlers struct {
 	kb             kb.Store
 	cog            cognition.Client
 	stats          store.StatsRepository
+	artifactList   store.ArtifactListRepository
 	schedules      store.SchedulesRepository
 	runTimeout     time.Duration
 	maxUploadBytes int64
@@ -45,10 +46,10 @@ type handlers struct {
 // NewRouter 装配路由与中间件。artifacts 可为 nil（仅 /artifacts 不可用）；
 // sessions 可为 nil（仅 /sessions 不可用）；healthChecks 可为 nil（/healthz 退化为「进程存活即 200」）；
 // webDir 非空时经 NotFound 托管前端静态资源 + SPA 回退（已注册 API 路由优先匹配，零冲突）。
-func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.SessionRepository, events store.EventRepository, artifacts artifact.Store, healthChecks map[string]health.Check, kbStore kb.Store, cog cognition.Client, stats store.StatsRepository, schedules store.SchedulesRepository, runTimeout time.Duration, webDir string, log *slog.Logger) http.Handler {
+func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.SessionRepository, events store.EventRepository, artifacts artifact.Store, healthChecks map[string]health.Check, kbStore kb.Store, cog cognition.Client, stats store.StatsRepository, artifactList store.ArtifactListRepository, schedules store.SchedulesRepository, runTimeout time.Duration, webDir string, log *slog.Logger) http.Handler {
 	h := &handlers{
 		dispatcher: d, runs: runs, sessions: sessions, events: events, artifacts: artifacts,
-		healthChecks: healthChecks, kb: kbStore, cog: cog, stats: stats, schedules: schedules, runTimeout: runTimeout,
+		healthChecks: healthChecks, kb: kbStore, cog: cog, stats: stats, artifactList: artifactList, schedules: schedules, runTimeout: runTimeout,
 		maxUploadBytes: DefaultMaxUploadBytes, log: log,
 	}
 	if v := os.Getenv("MAX_UPLOAD_BYTES"); v != "" {
@@ -76,6 +77,7 @@ func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.
 	r.Post("/schedules", h.createSchedule)
 	r.Delete("/schedules/{scheduleID}", h.deleteSchedule)
 	r.Post("/schedules/{scheduleID}/toggle", h.toggleSchedule)
+	r.Get("/artifacts", h.listArtifacts) // 跨会话产物画廊（owner 域）——与下面的对象代理精确路由共存
 	r.Get("/artifacts/*", h.artifact)
 	if webDir != "" {
 		r.NotFound(spaHandler(webDir))
@@ -444,4 +446,26 @@ func (h *handlers) usageStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, report)
+}
+
+
+// listArtifacts：GET /artifacts?limit=100 —— 跨会话产物画廊（owner 域，纯读）。
+func (h *handlers) listArtifacts(w http.ResponseWriter, r *http.Request) {
+	if h.artifactList == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "no_artifact_list", "产物列表未启用")
+		return
+	}
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	items, err := h.artifactList.ListByOwner(r.Context(), ownerOf(r), limit)
+	if err != nil {
+		h.log.Error("list artifacts failed", "err", err)
+		writeProblem(w, http.StatusInternalServerError, "internal", "产物列表查询失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"artifacts": items})
 }

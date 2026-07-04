@@ -182,7 +182,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	events := store.NewEventRepository(pool)
 	hub := stream.NewHub(events, time.Hour, discardLogger())
 	d := dispatch.New(4, runs, client, hub, 40, discardLogger())
-	router := api.NewRouter(d, runs, store.NewSessionRepository(pool), events, nil, nil, nil, nil, nil, nil, time.Minute, "", discardLogger())
+	router := api.NewRouter(d, runs, store.NewSessionRepository(pool), events, nil, nil, nil, nil, nil, nil, nil, time.Minute, "", discardLogger())
 	return &e2eEnv{ctx: ctx, runs: runs, events: events, router: router, cog: cog}
 }
 

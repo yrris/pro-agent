@@ -265,3 +265,25 @@ export async function toggleSchedule(id: string, enabled: boolean): Promise<void
   });
   if (!res.ok) throw new Error(`toggleSchedule failed: ${res.status}`);
 }
+
+
+// —— 跨会话产物画廊（Files 侧栏"产物"导航） ——
+
+export interface OwnerArtifact {
+  runId: string;
+  resourceKey: string;
+  name: string;
+  fileName: string;
+  downloadUrl: string;
+  previewUrl: string;
+  mimeType: string;
+  size: number;
+  tsUnixMs: number;
+}
+
+export async function listArtifacts(limit = 100): Promise<OwnerArtifact[]> {
+  const res = await fetch(`/artifacts?limit=${limit}`, { headers: headers() });
+  if (!res.ok) throw new Error(`listArtifacts failed: ${res.status}`);
+  const data = (await res.json()) as { artifacts: OwnerArtifact[] };
+  return data.artifacts ?? [];
+}

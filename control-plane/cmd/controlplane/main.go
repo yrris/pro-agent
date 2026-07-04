@@ -73,8 +73,9 @@ func main() {
 		kbIface = kbStore
 	}
 	statsRepo := store.NewStatsRepository(pool)
+	artifactListRepo := store.NewArtifactListRepository(pool)
 	schedRepo := store.NewSchedulesRepository(pool)
-	router := api.NewRouter(dispatcher, runs, sessions, events, artStore, healthChecks, kbIface, client, statsRepo, schedRepo, cfg.RunTimeout, cfg.WebDir, log)
+	router := api.NewRouter(dispatcher, runs, sessions, events, artStore, healthChecks, kbIface, client, statsRepo, artifactListRepo, schedRepo, cfg.RunTimeout, cfg.WebDir, log)
 
 	// M11 定时触发：调度器 goroutine（优雅停机时 cancel；headless run 自建超时）。
 	schedCtx, schedCancel := context.WithCancel(context.Background())
