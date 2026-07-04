@@ -47,6 +47,23 @@ def build_openai_edit_form(model: str, prompt: str, size: str, quality: str, n: 
     }
 
 
+def sniff_image_type(data: bytes) -> tuple[str, str]:
+    """按魔数嗅探图片真实类型，返回 (扩展名, content-type)（纯函数，可测）。
+
+    /images/edits 是 multipart：字段的文件名扩展名与 content-type 必须与真实字节匹配，
+    否则用户上传的 jpg/webp 照片被标成 png 可能被 OpenAI 拒（400）。默认回落 png。
+    """
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png", "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpg", "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp", "image/webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif", "image/gif"
+    return "png", "image/png"
+
+
 def parse_openai_images(data: dict[str, Any]) -> list[bytes]:
     """响应 → 图片字节列表（纯函数，可测）；形状异常抛 ValueError。"""
     items = data.get("data") or []
@@ -57,6 +74,8 @@ def parse_openai_images(data: dict[str, Any]) -> list[bytes]:
 
 
 class OpenAIImageProvider:
+    # 是否真正把源图送去生成（供 image_generate 措辞判断，不谎称图生图）。
+    supports_image_to_image = True
     def __init__(
         self, *, api_key: str, model: str, base_url: str, quality: str = "low", timeout: float = 180.0
     ) -> None:
@@ -78,7 +97,11 @@ class OpenAIImageProvider:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             if images:
                 # 图生图：multipart，图片用可重复字段名 image[]（OpenAI 契约），其余走表单。
-                files = [("image[]", (f"src-{i}.png", buf, "image/png")) for i, buf in enumerate(images)]
+                # 文件名扩展名/content-type 按真实字节嗅探（jpg/webp 照片不能标成 png）。
+                files = []
+                for i, buf in enumerate(images):
+                    ext, ctype = sniff_image_type(buf)
+                    files.append(("image[]", (f"src-{i}.{ext}", buf, ctype)))
                 resp = await client.post(
                     f"{self._base}/images/edits",
                     headers=headers,

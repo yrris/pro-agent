@@ -32,19 +32,25 @@ def build_image_generate_tool(provider: ImageGenProvider, settings: Settings) ->
         白名单机制同 script_runner 的 input_files：LLM 只能引用本轮消息注记里列出的
         文件名，key 已过 Go 归属闸；未知名回工具文本让模型自纠，绝不触达任意对象。
         """
-        names = list(source_images or [])[:_MAX_SOURCE_IMAGES]
+        all_names = list(source_images or [])
+        names = all_names[:_MAX_SOURCE_IMAGES]
+        dropped = all_names[_MAX_SOURCE_IMAGES:]  # 超限截断需回信给模型（否则静默丢图）
+        warn = (
+            f"源图超过 {_MAX_SOURCE_IMAGES} 张，仅取前 {_MAX_SOURCE_IMAGES} 张，忽略：{', '.join(dropped)}。"
+            if dropped else ""
+        )
         if not names:
-            return [], None
+            return [], None, ""
         resolved, problems = resolve_input_files(names, _attachments_from_config(config))
         if problems:
-            return [], "；".join(problems)
+            return [], "；".join(problems), ""
         from cognition.attachments import MinioDownloader
 
         downloader = MinioDownloader(settings)
         out: list[bytes] = []
         for resource_key, _dest in resolved:
             out.append(downloader(resource_key))
-        return out, None
+        return out, None, warn
 
     async def image_generate(
         prompt: str,
@@ -63,7 +69,7 @@ def build_image_generate_tool(provider: ImageGenProvider, settings: Settings) ->
         count = max(1, min(int(n), _MAX_N))
         # 源图下载是阻塞 I/O → to_thread（事件循环红线）。
         try:
-            sources, src_err = await asyncio.to_thread(_load_sources, source_images, config)
+            sources, src_err, src_warn = await asyncio.to_thread(_load_sources, source_images, config)
         except Exception as exc:  # noqa: BLE001 — 下载失败降级为错误文本
             return (f"源图读取失败: {exc}", None)
         if src_err:
@@ -97,8 +103,12 @@ def build_image_generate_tool(provider: ImageGenProvider, settings: Settings) ->
                     "missing": False,
                 }
             )
-        mode = "图生图" if sources else "文生图"
-        return (f"已生成 {len(artifacts)} 张图片（{mode}，prompt: {prompt[:80]}）。", artifacts)
+        # 措辞按是否传入源图 + provider 是否真吃源图：非 openai/ark（如 wanx 文生图）会
+        # 忽略源图，此时不谎称"图生图"。provider 经 supports_image_to_image 声明能力。
+        used_source = bool(sources) and getattr(provider, "supports_image_to_image", True)
+        mode = "图生图" if used_source else ("文生图（注：当前生图后端不支持图生图，已忽略上传图）" if sources else "文生图")
+        note = f" {src_warn}" if src_warn else ""
+        return (f"已生成 {len(artifacts)} 张图片（{mode}，prompt: {prompt[:80]}）。{note}", artifacts)
 
     tool = StructuredTool.from_function(
         coroutine=image_generate,

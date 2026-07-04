@@ -212,11 +212,16 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
             "kb_id": kb_id,
             "agent_type": agent_type,  # 研究模式的提示门与检索产物例外共用（M9）
         }
-        output_format = dict(request.metadata).get("output_format", "")
+        req_meta = dict(request.metadata)
+        output_format = req_meta.get("output_format", "")
         if output_format:
             # per-run 输出格式走 config（react think 调用期临时前置 system；
             # plan 的 executor 分支经 metadata spread 同机制获得）——不进 checkpoint。
             metadata["output_format"] = output_format
+        # 生图开关同机制透传：leading_prompt_from_config 读 config.metadata.image_gen
+        # 决定是否前置生图指令。漏传则整条生图开关链路成空操作（headline 功能失效）。
+        if req_meta.get("image_gen"):
+            metadata["image_gen"] = req_meta["image_gen"]
         if attachments:
             import json as _json
 

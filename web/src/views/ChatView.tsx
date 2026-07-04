@@ -108,7 +108,10 @@ function Composer({
     const q = text.trim();
     if (!q || disabled || uploading) return;
     const refs = atts.filter((a) => a.status === "done" && a.ref).map((a) => a.ref!) ;
-    onSubmit(q, refs.length ? refs : undefined, format || undefined, imageGen || undefined);
+    // 格式仅在选择器可用时才随请求发送：快速模式且未开生图时格式选择器被禁用，
+    // 但残留值不该继续透传（评审#11）。
+    const fmtApplicable = agentType !== "react" || imageGen;
+    onSubmit(q, refs.length ? refs : undefined, (fmtApplicable && format) || undefined, imageGen || undefined);
     setText("");
     setAtts([]);
   };
@@ -229,6 +232,7 @@ function Composer({
 // M7：单 RunState 视图升级为 timeline+live 多轮会话视图。
 // 历史轮次只读堆叠展示；Composer 仅在「载入历史/运行中」时禁用——载入完即可继续对话。
 export function ChatView({
+  visible,
   timeline,
   live,
   status,
@@ -243,6 +247,7 @@ export function ChatView({
   onArtifactsWidthChange,
   onApprovalDecision,
 }: {
+  visible: boolean;
   timeline: RunTurn[];
   live: RunTurn | null;
   status: RunStatus;
@@ -264,8 +269,9 @@ export function ChatView({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    if (!visible) return; // display:none 期间 scrollHeight=0，滚动无意义；切回可见(visible 变 true)时重滚
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [timeline.length, live?.state.order.length, live?.state.result?.text, status]);
+  }, [visible, timeline.length, live?.state.order.length, live?.state.result?.text, status]);
 
   const empty = timeline.length === 0 && !live && !loadingHistory;
   // artifact 工作区聚合整个会话（历史轮 + 当前轮）的产物。useMemo 依赖数组标识：

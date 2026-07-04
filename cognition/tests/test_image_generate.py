@@ -188,3 +188,40 @@ def test_image_generate_text_to_image_no_sources():
         {"args": {"prompt": "水墨山水"}, "id": "i3", "name": "image_generate", "type": "tool_call"},
         config={"metadata": {"request_id": "r"}}))
     assert "文生图" in msg.content and s.images is None
+
+
+def test_sniff_image_type_matrix():
+    """评审#1/#5：按魔数嗅探真实类型（jpg/webp/gif 照片不标成 png）。"""
+    from cognition.providers.image.openai import sniff_image_type
+
+    assert sniff_image_type(b"\x89PNG\r\n\x1a\nxxxx") == ("png", "image/png")
+    assert sniff_image_type(b"\xff\xd8\xff\xe0abc") == ("jpg", "image/jpeg")
+    assert sniff_image_type(b"RIFF\x00\x00\x00\x00WEBPzz") == ("webp", "image/webp")
+    assert sniff_image_type(b"GIF89a....") == ("gif", "image/gif")
+    assert sniff_image_type(b"garbage") == ("png", "image/png")  # 回落
+
+
+def test_image_generate_wanx_no_false_i2i_claim():
+    """评审#2：忽略源图的 provider（supports_image_to_image=False）不谎称图生图。"""
+    import asyncio as _a
+
+    class IgnoreProvider:
+        supports_image_to_image = False
+
+        async def generate(self, prompt, *, images=None, size="1024x1024", n=1):
+            return [b"\x89PNG\r\n\x1a\n"]  # 无视 images
+
+    tool = build_image_generate_tool(IgnoreProvider(), Settings())
+    meta = {"request_id": "r", "attachments": '[{"resource_key":"uploads/u/s/a-cat.png","file_name":"cat.png"}]'}
+    from cognition import attachments as _att
+
+    orig = _att.MinioDownloader
+    _att.MinioDownloader = lambda s: (lambda k: b"SRC")  # noqa: E731
+    try:
+        msg = _a.run(tool.ainvoke(
+            {"args": {"prompt": "改色", "source_images": ["cat.png"]}, "id": "i",
+             "name": "image_generate", "type": "tool_call"},
+            config={"metadata": meta}))
+    finally:
+        _att.MinioDownloader = orig
+    assert "不支持图生图" in msg.content  # 不谎称图生图，明示已忽略上传图

@@ -37,6 +37,8 @@ def parse_ark_response(data: dict[str, Any]) -> bytes:
 
 
 class ArkImageProvider:
+    # 是否真正把源图送去生成（供 image_generate 措辞判断，不谎称图生图）。
+    supports_image_to_image = True
     def __init__(self, *, api_key: str, model: str, base_url: str, timeout: float = 120.0) -> None:
         self._api_key = api_key
         self._model = model

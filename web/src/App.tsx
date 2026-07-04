@@ -72,8 +72,10 @@ export default function App() {
   // 进入会话：载入整段历史（hook 内取列表+逐 run 回放，同一代际防切换竞态）→
   // 可直接继续对话。重复点击同一会话 = 重新载入（失败后的重试入口）。
   const selectSession = useCallback(
-    async (id: string) => {
-      setActiveNav("chat"); // 选会话 = 回到对话视图（画廊/知识库里点会话也应切回）
+    async (id: string, switchToChat = true) => {
+      // 用户主动点会话 → 切回对话视图；但刷新后的自动预热(switchToChat=false)不能覆盖
+      // 用户持久化的 activeNav(如停在"产物"画廊)——否则每次刷新都被拽回对话。
+      if (switchToChat) setActiveNav("chat");
       setCurrentSessionId(id);
       const view = sessions.find((s) => s.id === id);
       if (view?.pendingLocal) {
@@ -95,7 +97,7 @@ export default function App() {
   useEffect(() => {
     if (didAutoSelect.current || currentSessionId || sessions.length === 0) return;
     didAutoSelect.current = true;
-    void selectSession(sessions[0].id);
+    void selectSession(sessions[0].id, false); // 只预热会话，不改用户持久化的 activeNav
   }, [sessions, currentSessionId, selectSession]);
 
   // currentSessionId 一定出自本 UI（新建草稿或会话列表），存在即信任——
@@ -179,6 +181,7 @@ export default function App() {
         {/* ChatView 常挂载（保住流式 DOM/滚动位置），非 chat 视图用 hidden 盖住 */}
         <div className={activeNav === "chat" ? "flex min-h-0 flex-1" : "hidden"}>
           <ChatView
+            visible={activeNav === "chat"}
             timeline={run.timeline}
             live={run.live}
             status={run.status}

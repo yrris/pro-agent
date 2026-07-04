@@ -23,6 +23,8 @@ def _png(rgb: tuple[int, int, int], w: int = 8, h: int = 8) -> bytes:
 
 
 class FakeImageProvider:
+    # 是否真正把源图送去生成（供 image_generate 措辞判断，不谎称图生图）。
+    supports_image_to_image = True
     """颜色由 prompt 哈希决定：确定性 + 不同 prompt 可区分。"""
 
     async def generate(
