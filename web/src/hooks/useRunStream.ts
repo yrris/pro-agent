@@ -93,6 +93,20 @@ export function useRunStream() {
     setLoadingHistory(false);
   }, [beginGen, clearView]);
 
+  // 用户主动中断当前运行：beginGen() 递增代际并 abort 当前 fetch → 连接关闭 →
+  // 后端 r.Context() 取消 → 级联取消 gRPC 流/图执行 → run 落 STOPPED(CLIENT_GONE)。
+  // 必须先 beginGen（在 abort 前递增代际）：否则 pump 的断线恢复分支会误触发回放+"连接中断"横幅。
+  // 保留已落库内容、标记本轮未终态，status 转 done 以重新启用 Composer。
+  const stop = useCallback(() => {
+    beginGen();
+    const turn = liveRef.current;
+    if (turn) {
+      liveRef.current = { ...turn, failed: !turn.state.finished };
+      setLive(liveRef.current);
+    }
+    setStatus("done");
+  }, [beginGen, setStatus]);
+
   const pump = useCallback(
     async (reader: ReadableStreamDefaultReader<Uint8Array>, gen: number) => {
       try {
@@ -276,5 +290,5 @@ export function useRunStream() {
     [archiveLive, beginGen, patchApproval, pump, setStatus],
   );
 
-  return { timeline, live, status, error, loadingHistory, start, loadSession, resetAll, resumeApproval };
+  return { timeline, live, status, error, loadingHistory, start, loadSession, resetAll, resumeApproval, stop };
 }

@@ -65,6 +65,7 @@ func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.
 	r.Get("/runs/{runID}/events", h.replay)
 	r.Post("/runs/{runID}/approvals", h.resolveApproval) // M11 HITL：决议→恢复 run（SSE）
 	r.Get("/sessions", h.listSessions)
+	r.Delete("/sessions/{sessionID}", h.deleteSession)
 	r.Get("/sessions/{sessionID}/runs", h.listSessionRuns)
 	r.Post("/uploads", h.upload)
 	// UX-1 Files 面板：用户知识库管理（读/删直连 Qdrant；上传入库走认知面 gRPC）。
@@ -359,6 +360,27 @@ func (h *handlers) listSessions(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
+}
+
+// deleteSession：DELETE /sessions/{id} —— 删除本 owner 的整段会话（runs+events）。
+// 删 0 行=会话不存在/非本人 → 404（不泄露他人会话存在性，同 ListRunsBySession 姿态）。
+func (h *handlers) deleteSession(w http.ResponseWriter, r *http.Request) {
+	if h.sessions == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "no_session_store", "会话存储未配置")
+		return
+	}
+	sessionID := chi.URLParam(r, "sessionID")
+	n, err := h.sessions.DeleteSession(r.Context(), ownerOf(r), sessionID)
+	if err != nil {
+		h.log.Error("delete session failed", "err", err)
+		writeProblem(w, http.StatusInternalServerError, "internal", "会话删除失败")
+		return
+	}
+	if n == 0 {
+		writeProblem(w, http.StatusNotFound, "not_found", "会话不存在")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deletedRuns": n})
 }
 
 // sessionRunJSON 是 GET /sessions/{id}/runs 的响应行（run 元数据，不内嵌事件——

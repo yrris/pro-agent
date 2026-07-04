@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   CalendarClock,
   ChartColumn,
@@ -7,6 +8,7 @@ import {
   MessageSquare,
   PanelLeft,
   Plus,
+  Trash2,
 } from "lucide-react";
 import type { SessionView } from "../lib/sessions";
 import type { NavView } from "../lib/uiPrefs";
@@ -42,6 +44,56 @@ function NavItem({
   );
 }
 
+export // 会话行：hover 出删除钮，两步确认（再点一次才真删）。
+function SessionRow({
+  s,
+  active,
+  onSelect,
+  onDelete,
+}: {
+  s: SessionView;
+  active: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <div
+      className={`group relative mb-1 rounded-lg border transition-colors ${
+        active ? "border-primary/40 bg-primary/10" : "border-transparent hover:bg-accent/50"
+      }`}
+    >
+      <button onClick={onSelect} className="block w-full p-2 pr-8 text-left">
+        <div className="truncate text-sm text-stone-200">{s.title || "（无标题）"}</div>
+        <div className="mt-0.5 flex items-center gap-1 text-[10px] text-stone-500">
+          <span>{s.agentType}</span>
+          <span>·</span>
+          <span>{s.pendingLocal ? "新会话" : `${s.runCount} 轮`}</span>
+        </div>
+      </button>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!confirming) {
+            setConfirming(true);
+            setTimeout(() => setConfirming(false), 3000);
+            return;
+          }
+          onDelete();
+        }}
+        title={confirming ? "再点一次确认删除" : "删除会话"}
+        className={`absolute right-1.5 top-1.5 rounded p-1 transition-colors ${
+          confirming
+            ? "bg-destructive/20 text-destructive"
+            : "text-stone-500 opacity-0 hover:text-destructive group-hover:opacity-100"
+        }`}
+      >
+        <Trash2 className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
 export function Sidebar({
   sessions,
   currentSessionId,
@@ -49,6 +101,7 @@ export function Sidebar({
   onNavChange,
   onNewSession,
   onSelectSession,
+  onDeleteSession,
   onToggleSidebar,
   health,
   userId,
@@ -61,6 +114,7 @@ export function Sidebar({
   onNavChange: (v: NavView) => void;
   onNewSession: () => void;
   onSelectSession: (id: string) => void;
+  onDeleteSession: (id: string) => void;
   onToggleSidebar: () => void;
   health: HealthReport | null;
   userId: string;
@@ -123,20 +177,13 @@ export function Sidebar({
             <div className="px-2 pb-2">
               {sessions.length === 0 && <div className="px-2 py-3 text-xs text-stone-500">还没有会话</div>}
               {sessions.map((s) => (
-                <button
+                <SessionRow
                   key={s.id}
-                  onClick={() => onSelectSession(s.id)}
-                  className={`mb-1 block w-full rounded-lg border p-2 text-left transition-colors ${
-                    s.id === currentSessionId ? "border-primary/40 bg-primary/10" : "border-transparent hover:bg-accent/50"
-                  }`}
-                >
-                  <div className="truncate text-sm text-stone-200">{s.title || "（无标题）"}</div>
-                  <div className="mt-0.5 flex items-center gap-1 text-[10px] text-stone-500">
-                    <span>{s.agentType}</span>
-                    <span>·</span>
-                    <span>{s.pendingLocal ? "新会话" : `${s.runCount} 轮`}</span>
-                  </div>
-                </button>
+                  s={s}
+                  active={s.id === currentSessionId}
+                  onSelect={() => onSelectSession(s.id)}
+                  onDelete={() => onDeleteSession(s.id)}
+                />
               ))}
             </div>
           </ScrollArea>

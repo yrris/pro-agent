@@ -63,6 +63,13 @@ export function pruneSessions(serverIds: Iterable<string>): SessionMeta[] {
   return pruned.sort((a, b) => b.createdAt - a.createdAt);
 }
 
+// 删除一个本地草稿并返回剩余列表（删除会话时同步清本地缓存，按当前 user 隔离）。
+export function removeLocalSession(id: string): SessionMeta[] {
+  const left = read().filter((s) => s.id !== id);
+  write(left);
+  return left.sort((a, b) => b.createdAt - a.createdAt);
+}
+
 // 服务端会话行的结构形状（与 client.ts 的 ServerSession 对齐；结构类型避免依赖倒置）。
 export interface ServerSessionLike {
   sessionId: string;

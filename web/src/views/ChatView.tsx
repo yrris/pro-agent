@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, ImagePlus, Loader2, Paperclip, RotateCw, X } from "lucide-react";
+import { ArrowUp, ImagePlus, Loader2, Paperclip, RotateCw, Square, X } from "lucide-react";
 import { MessageList } from "../components/chat";
 import { FilesPanel } from "../components/FilesPanel";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
@@ -64,6 +64,8 @@ function AttachmentChips({
 
 function Composer({
   disabled,
+  running,
+  onStop,
   placeholder,
   onSubmit,
   uploadSessionId,
@@ -71,6 +73,8 @@ function Composer({
   onAgentType,
 }: {
   disabled: boolean;
+  running: boolean;
+  onStop: () => void;
   placeholder: string;
   onSubmit: (q: string, attachments?: AttachmentRef[], outputFormat?: string, imageGen?: boolean) => void;
   uploadSessionId: string;
@@ -213,15 +217,26 @@ function Composer({
                 ))}
               </SelectContent>
             </Select>
-            <Button
-              onClick={submit}
-              disabled={disabled || uploading}
-              size="icon"
-              title={uploading ? "附件上传中…" : "发送（Enter）"}
-              className="rounded-xl bg-primary text-primary-foreground hover:bg-primary/85"
-            >
-              {uploading ? <Loader2 className="animate-spin" /> : <ArrowUp />}
-            </Button>
+            {running ? (
+              <Button
+                onClick={onStop}
+                size="icon"
+                title="停止生成"
+                className="rounded-xl bg-stone-700 text-stone-100 hover:bg-stone-600"
+              >
+                <Square className="fill-current" />
+              </Button>
+            ) : (
+              <Button
+                onClick={submit}
+                disabled={disabled || uploading}
+                size="icon"
+                title={uploading ? "附件上传中…" : "发送（Enter）"}
+                className="rounded-xl bg-primary text-primary-foreground hover:bg-primary/85"
+              >
+                {uploading ? <Loader2 className="animate-spin" /> : <ArrowUp />}
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -246,6 +261,7 @@ export function ChatView({
   artifactsWidth,
   onArtifactsWidthChange,
   onApprovalDecision,
+  onStop,
 }: {
   visible: boolean;
   timeline: RunTurn[];
@@ -266,6 +282,7 @@ export function ChatView({
     approved: boolean,
     comment?: string,
   ) => Promise<boolean> | void;
+  onStop: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -381,6 +398,8 @@ export function ChatView({
         </div>
         <Composer
           disabled={composerDisabled}
+          running={status === "running"}
+          onStop={onStop}
           placeholder={placeholder}
           onSubmit={onSubmit}
           uploadSessionId={uploadSessionId}

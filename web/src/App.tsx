@@ -9,17 +9,19 @@ import { Sidebar } from "./components/Sidebar";
 import { KnowledgePanel } from "./components/FilesPanel";
 import { SchedulesPanel } from "./components/SchedulesPanel";
 import { ArtifactsGallery } from "./components/ArtifactsGallery";
-import { listServerSessions, type AttachmentRef, type ServerSession } from "./lib/api/client";
+import { deleteSession, listServerSessions, type AttachmentRef, type ServerSession } from "./lib/api/client";
 import {
   createSession,
   listSessions as listLocalSessions,
   mergeSessions,
   pruneSessions,
+  removeLocalSession,
   type SessionMeta,
 } from "./lib/sessions";
 import { loadUiPrefs, saveUiPrefs, clampArtifactsWidth, type NavView } from "./lib/uiPrefs";
 import { Button } from "@/components/ui/button";
 import { PanelLeft } from "lucide-react";
+import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -129,6 +131,27 @@ export default function App() {
     [run, refreshSessions],
   );
 
+  // 删除会话：服务端删（若已落库）+ 本地草稿删；删的是当前会话则退回空白态。
+  const onDeleteSession = useCallback(
+    async (id: string) => {
+      const view = sessions.find((s) => s.id === id);
+      try {
+        if (!view?.pendingLocal) await deleteSession(id); // 已落库才打服务端
+      } catch {
+        toast.error("删除会话失败");
+        return;
+      }
+      setDrafts(removeLocalSession(id)); // 本地草稿一并清（纯函数，按当前 user 隔离）
+      if (id === currentSessionId) {
+        setCurrentSessionId(null);
+        run.resetAll();
+      }
+      void refreshSessions();
+      toast.success("已删除会话");
+    },
+    [sessions, currentSessionId, run, refreshSessions],
+  );
+
   const onNewSession = useCallback(() => {
     setActiveNav("chat"); // 从画廊/知识库点"新对话"须切回对话视图，否则新会话搁浅在别的视图后
     // 已停在一个空草稿上就复用它，避免连点"新会话"堆积幽灵草稿。
@@ -157,6 +180,7 @@ export default function App() {
           onNavChange={setActiveNav}
           onNewSession={onNewSession}
           onSelectSession={(id) => void selectSession(id)}
+          onDeleteSession={(id) => void onDeleteSession(id)}
           onToggleSidebar={() => setSidebarOpen(false)}
           health={health}
           userId={userId}
@@ -195,6 +219,7 @@ export default function App() {
             artifactsWidth={artifactsWidth}
             onArtifactsWidthChange={(w) => setArtifactsWidth(clampArtifactsWidth(w))}
             onApprovalDecision={onApprovalDecision}
+            onStop={run.stop}
           />
         </div>
         {activeNav === "artifacts" && <ArtifactsGallery onOpenSession={(id) => void selectSession(id)} />}

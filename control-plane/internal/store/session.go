@@ -31,6 +31,9 @@ type SessionSummary struct {
 type SessionRepository interface {
 	ListSessions(ctx context.Context, ownerID string, limit int) ([]SessionSummary, error)
 	ListRunsBySession(ctx context.Context, ownerID, sessionID string) ([]Run, error)
+	// DeleteSession 删除某 owner 的整段会话（其全部 runs 及 events）。
+	// 返回删除的 run 数（0 表示无此会话/非本人——调用方据此判 404 不泄露他人会话存在性）。
+	DeleteSession(ctx context.Context, ownerID, sessionID string) (int64, error)
 }
 
 type pgSessionRepo struct{ pool *pgxpool.Pool }
@@ -101,4 +104,32 @@ func (r *pgSessionRepo) ListRunsBySession(ctx context.Context, ownerID, sessionI
 		return nil, fmt.Errorf("store: list runs by session rows: %w", err)
 	}
 	return out, nil
+}
+
+// DeleteSession 在事务内删该 owner 会话的 events（先，events.run_id 外键引用 runs，
+// 无 ON DELETE CASCADE）再删 runs。owner 过滤写进 WHERE：他人会话删 0 行→上层 404。
+// 注：LangGraph checkpoint（thread_id=session_id）由认知面拥有，此处不清（无害孤儿，
+// 新会话用新 UUID；彻底清理另作认知面任务，见 docs/10）。
+func (r *pgSessionRepo) DeleteSession(ctx context.Context, ownerID, sessionID string) (int64, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("store: delete session begin: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck — 提交后回滚是 no-op
+
+	// 先删 events（子表）：只删属于本 owner+session 的 run 的事件。
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM events
+		 WHERE run_id IN (SELECT run_id FROM runs WHERE owner_id = $1 AND session_id = $2)`,
+		ownerID, sessionID); err != nil {
+		return 0, fmt.Errorf("store: delete session events: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM runs WHERE owner_id = $1 AND session_id = $2`, ownerID, sessionID)
+	if err != nil {
+		return 0, fmt.Errorf("store: delete session runs: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("store: delete session commit: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }

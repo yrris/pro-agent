@@ -105,6 +105,15 @@ export async function listServerSessions(limit = 50): Promise<ServerSession[]> {
   return body.sessions ?? [];
 }
 
+// 删除会话：DELETE /sessions/{id}（owner 域删 runs+events）。404=会话不存在/非本人。
+export async function deleteSession(sessionId: string): Promise<void> {
+  const res = await fetch(`/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  if (!res.ok && res.status !== 404) throw new Error(`deleteSession failed: ${res.status}`);
+}
+
 export interface SessionRunMeta {
   runId: string;
   query: string;
