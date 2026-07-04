@@ -113,7 +113,10 @@ export function useRunStream() {
           try {
             const reader2 = await replay(brokenRunId);
             let st = emptyRunState(brokenRunId);
-            for await (const frame of iterFrames(reader2)) st = applyFrame(st, frame);
+            for await (const frame of iterFrames(reader2)) {
+              if (genRef.current !== gen) return; // 已被切会话/新提问取代 → 丢弃，不污染新视图
+              st = applyFrame(st, frame);
+            }
             if (genRef.current !== gen) return;
             if (liveRef.current) {
               liveRef.current = { ...liveRef.current, state: st, failed: !st.finished };

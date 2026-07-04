@@ -2,7 +2,10 @@
 
 安全边界（SSRF）：URL 解析后逐个校验解析出的 IP——私网/环回/链路本地/元数据地址
 一律拒绝（工具参数是 LLM 可写面，提示注入可让模型去打内网；封禁在服务端做）。
-产出限幅：正文截断 MAX_TEXT_CHARS；仅 http/https；重定向后同样校验。
+重定向**手动逐跳**（禁 httpx 自动跟随）：每跳发请求前先校验，杜绝"请求已打到内网才校验落点"。
+产出限幅：正文截断 MAX_TEXT_CHARS；仅 http/https。
+已知残留（单用户本地平台可接受，生产应加出口代理/pin-resolver）：校验用 getaddrinfo 与
+httpx 连接时的再解析之间存在 DNS-rebinding 窗口（需攻击者控制低 TTL DNS）。
 """
 
 from __future__ import annotations
@@ -21,9 +24,12 @@ MAX_TEXT_CHARS = 20_000
 _TIMEOUT_S = 20.0
 _MAX_BYTES = 2 * 1024 * 1024  # 2MB 响应上限
 
+_MAX_REDIRECTS = 4
 _SKIP_TAGS = {"script", "style", "noscript", "svg", "head", "iframe", "template"}
 _BLOCK_TAGS = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6",
                "section", "article", "header", "footer", "pre", "blockquote"}
+# 行内元素之间补空格，避免 "<b>foo</b><b>bar</b>" 粘成 "foobar"（丢词边界）。
+_INLINE_SEP_TAGS = {"a", "b", "i", "em", "strong", "span", "code", "td", "th", "label", "small"}
 
 
 class _TextExtractor(HTMLParser):
@@ -43,6 +49,8 @@ class _TextExtractor(HTMLParser):
             self._in_title = True
         if tag in _BLOCK_TAGS:
             self._chunks.append("\n")
+        elif tag in _INLINE_SEP_TAGS:
+            self._chunks.append(" ")  # 词边界
 
     def handle_endtag(self, tag):  # noqa: ANN001
         if tag in _SKIP_TAGS and self._skip_depth > 0:
@@ -59,6 +67,19 @@ class _TextExtractor(HTMLParser):
     def text(self) -> str:
         raw = "".join(self._chunks)
         return re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t]+", " ", raw)).strip()
+
+
+def _decode_body(body: bytes, content_type: str, http_charset: Optional[str]) -> str:
+    """按优先级选编码解码：HTTP 头 charset > HTML <meta charset> > utf-8（纯函数，可测）。"""
+    enc = http_charset
+    if not enc:
+        m = re.search(rb'charset=["\']?([\w-]+)', body[:2048], re.IGNORECASE)
+        if m:
+            enc = m.group(1).decode("ascii", errors="ignore")
+    try:
+        return body.decode(enc or "utf-8", errors="replace")
+    except (LookupError, TypeError):
+        return body.decode("utf-8", errors="replace")
 
 
 def html_to_text(html: str) -> tuple[str, str]:
@@ -123,31 +144,42 @@ def build_web_fetch_tool() -> BaseTool:
 
         用于查资料/读文档/GitHub 页面等；不能访问内网地址；只支持 http/https。
         """
-        reason = validate_fetch_url(url)
-        if reason:
-            return f"抓取被拒绝：{reason}（{url}）"
+        # 关键：**禁 httpx 自动重定向**，手动逐跳——每一跳在发请求前都过 SSRF 校验，
+        # 否则 302→内网地址的请求会先打出去（blind SSRF）再校验落点，为时已晚。
         try:
             async with httpx.AsyncClient(
-                timeout=_TIMEOUT_S, follow_redirects=True,
+                timeout=_TIMEOUT_S, follow_redirects=False,
                 headers={"User-Agent": "pro-agent/1.0 (+research)"},
             ) as client:
-                async with client.stream("GET", url) as resp:
-                    # 重定向落点再校验（首跳校验可被 302 绕过）。
-                    final_reason = validate_fetch_url(str(resp.url))
-                    if final_reason:
-                        return f"抓取被拒绝：重定向目标 {final_reason}"
-                    if resp.status_code >= 400:
-                        return f"抓取失败：HTTP {resp.status_code}（{url}）"
-                    body = b""
-                    async for chunk in resp.aiter_bytes():
-                        body += chunk
-                        if len(body) > _MAX_BYTES:
-                            break
+                cur = url
+                resp = None
+                for _ in range(_MAX_REDIRECTS + 1):
+                    reason = validate_fetch_url(cur)  # 发请求前校验本跳目标
+                    if reason:
+                        return f"抓取被拒绝：{reason}（{cur}）"
+                    async with client.stream("GET", cur) as r:
+                        if r.is_redirect:
+                            loc = r.headers.get("location", "")
+                            cur = str(r.next_request.url) if r.next_request else loc
+                            continue
+                        if r.status_code >= 400:
+                            return f"抓取失败：HTTP {r.status_code}（{cur}）"
+                        body = b""
+                        async for chunk in r.aiter_bytes():
+                            body += chunk
+                            if len(body) > _MAX_BYTES:
+                                break
+                        resp = r
+                        break
+                else:
+                    return "抓取失败：重定向次数过多"
+                if resp is None:
+                    return "抓取失败：未获得响应"
         except httpx.HTTPError as exc:
             return f"抓取失败：{exc}"
 
         ctype = resp.headers.get("content-type", "")
-        text = body.decode(resp.charset_encoding or "utf-8", errors="replace")
+        text = _decode_body(body, resp.headers.get("content-type", ""), resp.charset_encoding)
         if "html" in ctype or text.lstrip()[:1] == "<":
             title, extracted = html_to_text(text)
             head = f"【{title}】\n" if title else ""

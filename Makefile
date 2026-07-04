@@ -1,3 +1,5 @@
+TEST_PG_DSN ?= postgres://agent:agent_pwd@localhost:55432/my_agent_test
+
 .PHONY: help proto proto-tools proto-go proto-py infra-up infra-down cognition control web check web-build stack-up stack-down stack-down-all
 
 # 读取 deploy/.env 并导出给应用进程（deploy/.env 不提交；含密钥与模型/连接配置）。
@@ -18,7 +20,7 @@ web: ## 启动前端（Vite :5173，代理到 :8080）
 check: ## 跑全部测试（Go + Python + 前端纯逻辑）
 	# TEST_PG_DSN 必须指向独立测试库 my_agent_test——集成测试会 TRUNCATE runs/events，
 	# 指向开发库会清空真实对话历史（踩过的坑）。首次：make test-db
-	cd control-plane && TEST_PG_DSN=postgres://agent:agent_pwd@localhost:55432/my_agent_test go test ./...
+	cd control-plane && TEST_PG_DSN=$(TEST_PG_DSN) go test ./...
 	cd cognition && uv run pytest -q
 	cd web && npm run test
 

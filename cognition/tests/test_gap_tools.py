@@ -40,7 +40,7 @@ def test_ssrf_guard_matrix():
 # —— code_interpreter ——
 
 def _ci(settings=None):
-    return build_code_interpreter_tool(settings or Settings())
+    return build_code_interpreter_tool(settings or Settings(code_interpreter_enabled=True))
 
 
 async def _run_ci(code: str, timeout: float | None = None):
@@ -56,8 +56,9 @@ async def _run_ci(code: str, timeout: float | None = None):
 
 def test_code_interpreter_stdout_and_artifact():
     msg = asyncio.run(_run_ci(
+        "import os\n"
         "print('结果=' + str(2**10))\n"
-        "with open(OUTPUT_DIR + '/out.txt', 'w') as f: f.write('hello')\n"
+        "with open(os.path.join(os.environ['SKILL_OUTPUT_DIR'], 'out.txt'), 'w') as f: f.write('hello')\n"
     ))
     assert "执行成功" in msg.content and "结果=1024" in msg.content
     assert msg.artifact and msg.artifact[0]["file_name"] == "out.txt"
@@ -163,3 +164,47 @@ def test_code_interpreter_env_isolation():
         del os.environ["FAKE_SECRET_FOR_TEST"]
     assert "SECRET=ABSENT" in msg.content  # 不继承任意变量
     assert "leak-me" not in msg.content
+
+
+def test_code_interpreter_default_off_and_gated_registration():
+    """评审#1：code_interpreter 默认关闭（危险原语 opt-in）。"""
+    async def names(settings):
+        from cognition.tools.registry import build_tool_suite
+
+        tools, _, closers = await build_tool_suite(settings)
+        for c in closers:
+            await c()
+        return {t.name for t in tools}
+
+    off = asyncio.run(names(Settings(mcp_enabled=False, skills_enabled=False)))
+    assert "code_interpreter" not in off  # 默认不注册
+    assert "web_fetch" in off  # web_fetch 默认开（有 SSRF 防护）
+    on = asyncio.run(names(Settings(mcp_enabled=False, skills_enabled=False, code_interpreter_enabled=True)))
+    assert "code_interpreter" in on
+
+
+def test_office_zip_bomb_guard():
+    """评审#4/#8：伪造成超大解压比的 office zip 被拒（不进解析）。"""
+    import io
+    import zipfile
+
+    from cognition.attachments import _office_zip_safe
+
+    # 正常小 zip 放行。
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("word/document.xml", "<xml>hi</xml>")
+    assert _office_zip_safe(buf.getvalue()) is True
+    # 高压缩比炸弹：0 字节压成的 200MB 全零。
+    bomb = io.BytesIO()
+    with zipfile.ZipFile(bomb, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("big.xml", b"\x00" * (200 * 1024 * 1024))
+    assert _office_zip_safe(bomb.getvalue()) is False
+
+
+def test_openai_alias_does_not_steal_ark(monkeypatch):
+    """评审#20：环境里有 OPENAI_API_KEY 时，ark 配置（ARK_API_KEY）不被抢。"""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    monkeypatch.setenv("ARK_API_KEY", "ark-key")
+    s = Settings(image_gen_provider="ark")
+    assert s.image_gen_api_key == "ark-key"  # ARK 在 OPENAI 之前命中

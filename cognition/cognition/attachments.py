@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import logging
 from collections import OrderedDict
 from typing import Any, Callable, Iterable, Optional, Sequence
@@ -169,6 +170,21 @@ def is_text_like(mime: str, file_name: str = "") -> bool:
     return any(name.endswith(ext) for ext in _TEXT_EXTS)
 
 
+_MAX_OFFICE_UNCOMPRESSED = 100 * 1024 * 1024  # office(zip) 解压总大小上限，防 zip-bomb DoS
+
+
+def _office_zip_safe(data: bytes) -> bool:
+    """docx/xlsx 本质是 zip：解析前校验解压总大小（20MB 压缩包可膨胀到 GB 级）。"""
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            total = sum(i.file_size for i in zf.infolist())
+        return total <= _MAX_OFFICE_UNCOMPRESSED
+    except Exception:  # noqa: BLE001 — 非法 zip 交给下游解析报错
+        return True
+
+
 _DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -189,8 +205,6 @@ def extract_text(data: bytes, mime: str, file_name: str = "") -> Optional[str]:
     """从附件字节提取纯文本；不可提取/失败返回 None（调用方跳过，不炸 run）。"""
     if is_pdf(mime, file_name):
         try:
-            import io
-
             from pypdf import PdfReader  # 惰性：未装/损坏 pdf 都降级
 
             reader = PdfReader(io.BytesIO(data))
@@ -201,9 +215,10 @@ def extract_text(data: bytes, mime: str, file_name: str = "") -> Optional[str]:
             logger.warning("pdf text extract failed for %s: %s", file_name, exc)
             return None
     if is_docx(mime, file_name):
+        if not _office_zip_safe(data):
+            logger.warning("docx 解压过大（疑似 zip-bomb），跳过: %s", file_name)
+            return None
         try:
-            import io
-
             from docx import Document  # 惰性：python-docx
 
             doc = Document(io.BytesIO(data))
@@ -219,19 +234,28 @@ def extract_text(data: bytes, mime: str, file_name: str = "") -> Optional[str]:
             logger.warning("docx text extract failed for %s: %s", file_name, exc)
             return None
     if is_xlsx(mime, file_name):
+        if not _office_zip_safe(data):
+            logger.warning("xlsx 解压过大（疑似 zip-bomb），跳过: %s", file_name)
+            return None
         try:
-            import io
-
             from openpyxl import load_workbook  # 惰性：openpyxl
 
             wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
             parts: list[str] = []
+            acc = 0  # 累积字符上限：read_only 流式，边读边停，不等全表读完
             for ws in wb.worksheets:
                 parts.append(f"# 工作表: {ws.title}")
                 for row in ws.iter_rows(values_only=True):
                     cells = ["" if v is None else str(v) for v in row]
                     if any(c.strip() for c in cells):
-                        parts.append(",".join(cells))  # CSV 形态：DuckDB/检索都友好
+                        line = ",".join(cells)
+                        parts.append(line)
+                        acc += len(line)
+                        if acc > MAX_INGEST_CHARS:
+                            parts.append("…（超长截断）")
+                            wb.close()
+                            return "\n".join(parts).strip()
+            wb.close()
             text = "\n".join(parts).strip()
             return text or None
         except Exception as exc:  # noqa: BLE001

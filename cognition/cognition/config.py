@@ -178,9 +178,10 @@ class Settings(BaseSettings):
     # —— M12 工具缺口 ——
     # web_fetch：抓公开网页（SSRF 服务端封禁私网）；关掉则不注册。
     web_fetch_enabled: bool = Field(default=True)
-    # code_interpreter：任意 Python 沙箱执行。运行形态随 skill_runner（local/docker）；
-    # 生产建议 docker + 列入 approval_tools（这是任意代码执行原语）。
-    code_interpreter_enabled: bool = Field(default=True)
+    # code_interpreter：任意 Python 执行——**默认关闭**（危险原语必须显式 opt-in）。
+    # 开启前提：skill_runner=docker（强隔离）或把 "code_interpreter" 列入 approval_tools
+    # （每次执行人工审批）。local 运行器 + 无审批 = 认知面主机上的无沙箱 RCE，装配期会告警。
+    code_interpreter_enabled: bool = Field(default=False)
 
     # —— 图像生成（M9 线 B：provider 抽象可切换，国产便宜模型优先）——
     # 空串=不注册 image_generate 工具（镜像 rag_enabled 门控先例）；fake 供测试/离线。
@@ -194,8 +195,10 @@ class Settings(BaseSettings):
     )
     image_gen_api_key: str | None = Field(
         default=None,
+        # OPENAI_API_KEY 放最后：pydantic-settings 取首个命中的别名，放前面会让既有
+        # ark/wanx（ARK_API_KEY/DASHSCOPE_API_KEY）配置被同环境里的 OPENAI_API_KEY 抢走。
         validation_alias=AliasChoices(
-            "COGNITION_IMAGE_GEN_API_KEY", "IMAGE_GEN_API_KEY", "OPENAI_API_KEY", "ARK_API_KEY", "DASHSCOPE_API_KEY"
+            "COGNITION_IMAGE_GEN_API_KEY", "IMAGE_GEN_API_KEY", "ARK_API_KEY", "DASHSCOPE_API_KEY", "OPENAI_API_KEY"
         ),
     )
     # openai(gpt-image) 专用：low 成本优先（用户可调 medium/high/auto）。

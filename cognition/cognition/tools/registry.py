@@ -85,9 +85,18 @@ async def build_tool_suite(
         from cognition.tools.web_fetch import build_web_fetch_tool
 
         tools.append(build_web_fetch_tool())
-    if getattr(settings, "code_interpreter_enabled", True):
+    if getattr(settings, "code_interpreter_enabled", False):
         from cognition.tools.code_interpreter import build_code_interpreter_tool
 
+        unsafe = (
+            getattr(settings, "skill_runner", "local") != "docker"
+            and "code_interpreter" not in set(getattr(settings, "approval_tools", []) or [])
+        )
+        if unsafe:
+            logger.warning(
+                "code_interpreter 已开启但既非 docker 运行器也未列入 approval_tools——"
+                "这是认知面主机上的无沙箱任意代码执行，仅限可信本地环境！"
+            )
         tools.append(build_code_interpreter_tool(settings))
 
     # —— Skill：扫描 SKILL.md + 构建工具 ——
