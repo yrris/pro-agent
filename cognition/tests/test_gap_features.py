@@ -1,0 +1,88 @@
+"""后续能力批次：B.4 plan生图 / B.2 图片OCR入库 / B.1 生成图内联网页。"""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import subprocess
+import tempfile
+
+from cognition.attachments import build_ingestor, extract_text, is_image
+from cognition.config import Settings
+from cognition.graphs.nodes import IMAGE_GEN_INSTRUCTION
+from cognition.graphs.plan_execute import PLANNER_SYSTEM, compose_planner_system
+from cognition.skills.runner.scratch import has_generated, run_generated_dir, stash_generated
+
+_FMT = {"ppt": "PPT格式提示"}
+
+
+# —— B.4 plan-mode 生图 ——
+
+def test_compose_planner_system_image_gen():
+    on = compose_planner_system(PLANNER_SYSTEM, "SOP", "ppt", _FMT, image_gen=True)
+    assert "SOP" in on and IMAGE_GEN_INSTRUCTION in on and _FMT["ppt"] in on
+    off = compose_planner_system(PLANNER_SYSTEM, "SOP", "ppt", _FMT, image_gen=False)
+    assert IMAGE_GEN_INSTRUCTION not in off and _FMT["ppt"] in off
+
+
+# —— B.2 图片 OCR 入库 ——
+
+def test_extract_text_image_branch():
+    assert is_image("image/png")
+    assert extract_text(b"x", "image/png", "a.png") is None  # 无转写器→跳过
+    assert extract_text(b"x", "image/png", "a.png", transcribe=lambda d, m: "图中文字") == "图中文字"
+    assert extract_text(b"x", "image/png", "a.png", transcribe=lambda d, m: None) is None
+
+
+def test_ingestor_admits_image_with_transcriber(monkeypatch):
+    captured = {}
+    import cognition.rag.ingest as ing
+
+    monkeypatch.setattr(ing, "ingest", lambda docs, kb_id, **kw: captured.update(docs=docs))
+    ingestor = build_ingestor(
+        Settings(rag_enabled=False), downloader=lambda k: b"imgbytes",
+        store=object(), embedder=object(), sparse=object(),
+        transcribe=lambda d, m: "OCR:销售额100万",
+    )
+    names = ingestor([{"mime_type": "image/png", "file_name": "chart.png", "resource_key": "r/tc/chart.png"}], "owner:u")
+    assert names == ["chart.png"]
+    assert "销售额100万" in captured["docs"][0]["text"]
+
+
+def test_ingestor_skips_image_without_transcriber(monkeypatch):
+    import cognition.rag.ingest as ing
+
+    monkeypatch.setattr(ing, "ingest", lambda *a, **k: None)
+    # transcribe=None + 无 anthropic key → build_image_transcriber 返回 None → 图片跳过。
+    ingestor = build_ingestor(
+        Settings(rag_enabled=False, anthropic_api_key=None), downloader=lambda k: b"x",
+        store=object(), embedder=object(), sparse=object(), transcribe=None,
+    )
+    assert ingestor([{"mime_type": "image/png", "file_name": "a.png", "resource_key": "r/tc/a.png"}], "owner:u") == []
+
+
+# —— B.1 生成图内联网页 ——
+
+def test_scratch_stash_and_has():
+    rid = "run-scratch-test"
+    stash_generated(rid, "image-1.png", b"\x89PNG\r\n\x1a\nX")
+    assert has_generated(rid)
+    assert os.path.isfile(os.path.join(run_generated_dir(rid), "image-1.png"))
+
+
+def test_render_page_inlines_generated_image():
+    gen = tempfile.mkdtemp()
+    out = tempfile.mkdtemp()
+    with open(os.path.join(gen, "image-1.png"), "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\nFAKE")
+    env = {**os.environ, "SKILL_GENERATED_DIR": gen, "SKILL_OUTPUT_DIR": out}
+    html = '<html><body><img src="generated/image-1.png"><img src="generated/nope.png"></body></html>'
+    script = os.path.join(os.path.dirname(__file__), "..", "runtime", "skills", "frontend-design", "scripts", "render_page.py")
+    r = subprocess.run(["python3", script, json.dumps({"title": "T", "html": html})], env=env, capture_output=True, text=True)
+    assert r.returncode == 0 and "内联生成图 1 张" in r.stdout
+    site = open(os.path.join(out, "site.html")).read()
+    assert "data:image/png;base64," in site  # 存在的 generated 图内联
+    b64 = base64.b64encode(b"\x89PNG\r\n\x1a\nFAKE").decode()
+    assert b64 in site
+    assert "generated/nope.png" in site  # 不存在的引用原样保留

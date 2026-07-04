@@ -91,6 +91,10 @@ def build_image_generate_tool(provider: ImageGenProvider, settings: Settings) ->
             resource_key = f"{run_id}/{tcid}/{file_name}"
             # 上传阻塞 I/O → to_thread（事件循环红线）；失败不阻断（_maybe_upload 内降级）。
             await asyncio.to_thread(_maybe_upload, settings, resource_key, data, "image/png")
+            # B.1：同时把副本落进本 run 的生成图暂存区，供 frontend-design 内联进网页。
+            from cognition.skills.runner.scratch import stash_generated
+
+            await asyncio.to_thread(stash_generated, run_id, file_name, data)
             artifacts.append(
                 {
                     "resource_key": resource_key,

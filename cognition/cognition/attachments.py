@@ -201,8 +201,19 @@ def is_pdf(mime: str, file_name: str = "") -> bool:
     return (mime or "").lower() == PDF_MIME or (file_name or "").lower().endswith(".pdf")
 
 
-def extract_text(data: bytes, mime: str, file_name: str = "") -> Optional[str]:
-    """从附件字节提取纯文本；不可提取/失败返回 None（调用方跳过，不炸 run）。"""
+def extract_text(
+    data: bytes,
+    mime: str,
+    file_name: str = "",
+    *,
+    transcribe: Optional[Callable[[bytes, str], Optional[str]]] = None,
+) -> Optional[str]:
+    """从附件字节提取纯文本；不可提取/失败返回 None（调用方跳过，不炸 run）。
+
+    transcribe：图片 OCR 转写器（B.2）——给了才对 image/* 转文本，否则图片仍返回 None。
+    """
+    if is_image(mime) and transcribe is not None:
+        return transcribe(data, mime)
     if is_pdf(mime, file_name):
         try:
             from pypdf import PdfReader  # 惰性：未装/损坏 pdf 都降级
@@ -269,6 +280,42 @@ def extract_text(data: bytes, mime: str, file_name: str = "") -> Optional[str]:
     return None
 
 
+def build_image_transcriber(settings: Settings) -> Optional[Callable[[bytes, str], Optional[str]]]:
+    """构建图片 OCR/转写器（B.2）：用 anthropic vision 把图片转成可入库文本。
+
+    **不依赖 executor 角色**（默认 deepseek 无视觉）——只要有 anthropic key 就可用；
+    无 key 返回 None（调用方据此不放行图片入库）。返回的闭包同步阻塞（在 to_thread 内跑）。
+    """
+    if not getattr(settings, "anthropic_api_key", None):
+        return None
+    from langchain_core.messages import HumanMessage
+
+    from cognition.providers.anthropic_provider import build_anthropic_chat
+
+    model = build_anthropic_chat(settings, max_tokens=2000)
+
+    def _transcribe(data: bytes, mime: str) -> Optional[str]:
+        if len(data) > MAX_IMAGE_BYTES:
+            return None  # 过大图不 OCR（成本/超限）
+        import base64 as _b64
+
+        b64 = _b64.b64encode(data).decode("ascii")
+        msg = HumanMessage(content=[
+            {"type": "text", "text": "请把这张图片里的所有文字/表格/图表信息完整转写成纯文本"
+                                      "（保留结构，用于检索）。只输出转写内容，不要额外说明。"},
+            {"type": "image", "source_type": "base64", "data": b64, "mime_type": mime or "image/png"},
+        ])
+        try:
+            out = model.invoke([msg])
+            text = out.content if isinstance(out.content, str) else str(out.content)
+            return text.strip() or None
+        except Exception as exc:  # noqa: BLE001 — OCR 失败降级跳过，不拖垮入库
+            logger.warning("image OCR failed: %s", exc)
+            return None
+
+    return _transcribe
+
+
 def build_ingestor(
     settings: Optional[Settings] = None,
     *,
@@ -276,6 +323,7 @@ def build_ingestor(
     store: Any = None,
     embedder: Any = None,
     sparse: Any = None,
+    transcribe: Optional[Callable[[bytes, str], Optional[str]]] = None,
 ) -> Callable[[list[dict], str], list[str]]:
     """构建附件入库器（装配期一次；I/O 依赖可注入供离线测试）。
 
@@ -291,6 +339,8 @@ def build_ingestor(
         embedder = embedder or build_embedder(settings)
         sparse = sparse or build_sparse(settings)
     dl = downloader or MinioDownloader(settings)
+    # B.2：图片 OCR 转写器（有 anthropic key 才启用；显式传 transcribe 覆盖，供离线测试注入 fake）。
+    _transcribe = transcribe if transcribe is not None else build_image_transcriber(settings)
 
     def _ingest_attachments(attachments: list[dict], kb_id: str) -> list[str]:
         from cognition.rag.ingest import ingest
@@ -301,14 +351,17 @@ def build_ingestor(
         names: list[str] = []
         for a in attachments or []:
             mime, fname = a.get("mime_type", ""), a.get("file_name", "")
-            if not (is_text_like(mime, fname) or is_pdf(mime, fname) or is_docx(mime, fname) or is_xlsx(mime, fname)):
-                continue  # 图片等非文本：走多模态/占位路径，不进知识库
+            # 图片仅在有 OCR 转写器时放行入库（B.2）；否则仍走多模态/占位路径。
+            ocr_image = _transcribe is not None and is_image(mime)
+            if not (is_text_like(mime, fname) or is_pdf(mime, fname) or is_docx(mime, fname)
+                    or is_xlsx(mime, fname) or ocr_image):
+                continue
             try:
                 data = dl(a["resource_key"])
             except Exception as exc:  # noqa: BLE001 — 单文件失败不拖垮其余
                 logger.warning("attachment download failed for ingest %s: %s", a.get("resource_key"), exc)
                 continue
-            text = extract_text(data, mime, fname)
+            text = extract_text(data, mime, fname, transcribe=_transcribe)
             if not text or not text.strip():
                 continue
             if len(text) > MAX_INGEST_CHARS:

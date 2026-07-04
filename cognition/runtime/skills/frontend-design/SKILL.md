@@ -30,5 +30,10 @@ script_runner(
 - 中文排版：`font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif`；
   行高 1.6-1.8。
 
-需要配图时先用 image_generate 生成，再以产物 URL 说明（沙箱内无法内联外部图，
-可用纯 CSS 装饰/emoji/inline SVG 替代）。
+## 配图（把生成的图放进网页）
+
+要在网页里放图：**先调 `image_generate` 生成**（它产出 `image-1.png`/`image-2.png`…），
+然后在 HTML 里用 **`<img src="generated/image-1.png">`** 引用——`render_page.py` 会把这类
+`src="generated/xxx"` 自动替换成内联 data-URI，产物区预览即可真正显示那张生成图（沙箱无网络，
+只有内联 data-URI 能显示）。文件名要与 image_generate 产出的一致（image-1.png 起编号）。
+不需要真实照片时，也可用纯 CSS 装饰/emoji/inline SVG 替代。

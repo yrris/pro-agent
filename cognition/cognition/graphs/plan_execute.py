@@ -77,12 +77,22 @@ PLANNER_SYSTEM = (
 )
 
 def compose_planner_system(
-    planner_system: str, sop: str, output_format: str, format_prompts: dict[str, str]
+    planner_system: str, sop: str, output_format: str, format_prompts: dict[str, str],
+    image_gen: bool = False,
 ) -> str:
     """拼 planner 系统提示词（纯函数）：{{sop}} 槽 + per-run 输出格式模板（未知值忽略）。"""
     text = planner_system.replace("{{sop}}", sop)
+    parts = [text]
+    if image_gen:
+        # B.4：与 react think 的 IMAGE_GEN_INSTRUCTION 对齐——让 planner 把"生成图片"
+        # 显式排进计划步骤（executor 执行时再由自身 think 节点拿到同指令）。
+        from cognition.graphs.nodes import IMAGE_GEN_INSTRUCTION
+
+        parts.append(IMAGE_GEN_INSTRUCTION)
     extra = format_prompts.get(output_format or "", "")
-    return f"{text}\n\n{extra}" if extra else text
+    if extra:
+        parts.append(extra)
+    return "\n\n".join(parts)
 
 
 # 深度研究模式的规划器提示词（M9：agent_type=deep_research 用第二编译图，
@@ -292,6 +302,7 @@ class PlanExecuteState(TypedDict, total=False):
     step: int            # 预留
     reduced_state: str   # 上一轮并行归约结果（ERROR/IDLE/FINISHED）
     output_format: str   # M9：per-run 输出格式（planner system 拼接；镜像 sop 的注入模式）
+    image_gen: bool      # B.4：生图开关（planner system 拼接生图引导）
     planner_messages: Annotated[list, add_messages]
     sub_results: Annotated[list[SubResult], merge_sub_results]
 
@@ -412,7 +423,8 @@ def build_plan_execute_graph(
         # 第二轮起会 400。入模型前做修复投影（补合成应答），state 原样累积不动。
         history = repair_dangling_tool_calls(list(state.get("planner_messages") or []))
         system_text = compose_planner_system(
-            planner_system, sop, state.get("output_format", ""), format_prompts or {}
+            planner_system, sop, state.get("output_format", ""), format_prompts or {},
+            image_gen=bool(state.get("image_gen", False)),
         )
         system = SystemMessage(content=system_text)
 

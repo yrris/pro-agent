@@ -101,6 +101,9 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
                 # checkpoint 延续，新 run 会被 route_after_planner 直接送去 summary。
                 "reduced_state": "",
                 "output_format": dict(getattr(request, "metadata", {}) or {}).get("output_format", ""),
+                # B.4：生图开关也进 plan state，planner 据此把生图步骤纳入规划（executor
+                # 侧已由 config.metadata spread 覆盖；planner 节点只读 state，故走 state）。
+                "image_gen": bool(dict(getattr(request, "metadata", {}) or {}).get("image_gen", "")),
                 "planner_messages": [],
                 "sub_results": [],
             }

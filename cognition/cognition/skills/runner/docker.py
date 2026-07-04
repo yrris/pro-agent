@@ -48,7 +48,7 @@ class DockerScriptRunner:
             self._downloader = MinioDownloader(self._settings)
         return self._downloader
 
-    def _docker_argv(self, req: ScriptRunRequest, out_dir: str, in_dir: str | None = None) -> list[str]:
+    def _docker_argv(self, req: ScriptRunRequest, out_dir: str, in_dir: str | None = None, gen_dir: str | None = None) -> list[str]:
         # 容器内命令：把 req.cmd 的相对脚本路径挂到 /skill 下执行；产物写 /out。
         # matplotlib 等需要可写缓存目录 → --tmpfs /tmp + MPLCONFIGDIR（--read-only 下唯一可写处）。
         interpreter, rel_script, json_args = req.cmd
@@ -67,6 +67,8 @@ class DockerScriptRunner:
         ]
         if in_dir is not None:
             argv += ["-v", f"{in_dir}:/in:ro", "-e", "SKILL_INPUT_DIR=/in"]
+        if gen_dir is not None:  # B.1：生成图暂存只读挂载（不改 --network none/--read-only）
+            argv += ["-v", f"{gen_dir}:/generated:ro", "-e", "SKILL_GENERATED_DIR=/generated"]
         argv += [
             "-w", "/skill",
             self._image,
@@ -83,7 +85,10 @@ class DockerScriptRunner:
                 await asyncio.to_thread(stage_inputs, req.input_files, self._get_downloader(), in_dir)
             except Exception as exc:  # noqa: BLE001 — 输入落地失败=确定性前置失败
                 return ScriptResult(exit_code=126, stdout="", stderr=f"输入文件下载失败: {exc}")
-        argv = self._docker_argv(req, out_dir, in_dir)
+        from cognition.skills.runner.scratch import has_generated, run_generated_dir
+
+        gen_dir = run_generated_dir(run_id) if has_generated(run_id) else None
+        argv = self._docker_argv(req, out_dir, in_dir, gen_dir)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
