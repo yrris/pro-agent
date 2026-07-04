@@ -98,3 +98,21 @@ def test_registry_gating():
     on, pm = asyncio.run(names(Settings(image_gen_provider="fake", mcp_enabled=False, skills_enabled=False)))
     assert "image_generate" not in off
     assert "image_generate" in on and pm["image_generate"] == "local"
+
+
+def test_openai_payload_and_parse():
+    """M12：OpenAI gpt-image provider——quality 默认 low、尺寸回落 auto、b64 解析。"""
+    from cognition.providers.image.openai import build_openai_image_payload, parse_openai_images
+
+    p = build_openai_image_payload("gpt-image-2", "猫", "1024x1024", "low", 2)
+    assert p["quality"] == "low" and p["n"] == 2 and p["size"] == "1024x1024"
+    assert build_openai_image_payload("m", "x", "512x512", "", 9)["size"] == "auto"  # 非法尺寸回落
+    assert build_openai_image_payload("m", "x", "512x512", "", 9)["n"] == 4  # n 夹取
+    import base64 as b64
+
+    assert parse_openai_images({"data": [{"b64_json": b64.b64encode(b"IMG").decode()}]}) == [b"IMG"]
+
+
+def test_openai_factory_selection():
+    p = build_image_provider(Settings(image_gen_provider="openai", image_gen_api_key="k"))
+    assert type(p).__name__ == "OpenAIImageProvider"

@@ -106,6 +106,27 @@ export function useRunStream() {
         setStatus("done");
       } catch (e) {
         if (genRef.current !== gen) return;
+        // M12 断线恢复：SSE 中断（网络抖动/代理断开）→ 服务端已按断连取消本 run，
+        // 但事件"先落库后推送"——回放一次把已落库帧补齐视图，用户不丢已产生内容。
+        const brokenRunId = liveRef.current?.runId;
+        if (brokenRunId) {
+          try {
+            const reader2 = await replay(brokenRunId);
+            let st = emptyRunState(brokenRunId);
+            for await (const frame of iterFrames(reader2)) st = applyFrame(st, frame);
+            if (genRef.current !== gen) return;
+            if (liveRef.current) {
+              liveRef.current = { ...liveRef.current, state: st, failed: !st.finished };
+            }
+            flush();
+            setStatus(st.finished ? "done" : "error");
+            setError(st.finished ? "" : "连接中断：已恢复落库内容，本轮未走到终态，可重新提问");
+            return;
+          } catch {
+            /* 回放也失败（服务不可达）→ 落到原错误路径 */
+          }
+        }
+        if (genRef.current !== gen) return;
         flush();
         setStatus("error");
         setError(e instanceof Error ? e.message : String(e));

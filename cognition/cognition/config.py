@@ -185,7 +185,7 @@ class Settings(BaseSettings):
     # —— 图像生成（M9 线 B：provider 抽象可切换，国产便宜模型优先）——
     # 空串=不注册 image_generate 工具（镜像 rag_enabled 门控先例）；fake 供测试/离线。
     image_gen_provider: str = Field(
-        default="",  # "" | "fake" | "ark"(火山方舟豆包) | "wanx"(通义万相)
+        default="",  # "" | "fake" | "openai"(gpt-image) | "ark"(火山方舟) | "wanx"(通义万相)
         validation_alias=AliasChoices("COGNITION_IMAGE_GEN_PROVIDER", "IMAGE_GEN_PROVIDER"),
     )
     image_gen_model: str = Field(
@@ -195,9 +195,11 @@ class Settings(BaseSettings):
     image_gen_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
-            "COGNITION_IMAGE_GEN_API_KEY", "IMAGE_GEN_API_KEY", "ARK_API_KEY", "DASHSCOPE_API_KEY"
+            "COGNITION_IMAGE_GEN_API_KEY", "IMAGE_GEN_API_KEY", "OPENAI_API_KEY", "ARK_API_KEY", "DASHSCOPE_API_KEY"
         ),
     )
+    # openai(gpt-image) 专用：low 成本优先（用户可调 medium/high/auto）。
+    image_gen_quality: str = Field(default="low")
     image_gen_base_url: str = Field(default="")  # 空则用各 provider 默认端点
     image_gen_size: str = Field(default="1024x1024")
 

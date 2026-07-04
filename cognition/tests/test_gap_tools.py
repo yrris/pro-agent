@@ -114,3 +114,35 @@ def test_xlsx_extract():
 def test_corrupt_office_degrades_none():
     assert extract_text(b"not a real docx", "", "x.docx") is None
     assert extract_text(b"not a real xlsx", "", "x.xlsx") is None
+
+
+def test_new_skills_load_and_render_page():
+    """M12：github-deep-research（纯提示词）与 frontend-design（render_page.py）注册与执行。"""
+    from pathlib import Path
+
+    from cognition.skills.registry import SkillRegistry
+    from cognition.skills.runner.local import LocalSubprocessScriptRunner
+    from cognition.skills.tools import build_skill_tools
+
+    skill_dir = Path(__file__).resolve().parents[1] / "runtime" / "skills"
+    reg = SkillRegistry()
+    reg.refresh([str(skill_dir)])
+    names = {s.name for s in reg.list()}
+    assert {"github-deep-research", "frontend-design"} <= names
+
+    tools = {t.name: t for t in build_skill_tools(reg, LocalSubprocessScriptRunner())}
+    # L2 展开含调研流程/设计准则关键词。
+    assert "web_fetch" in tools["skill"].invoke({"name": "github-deep-research"})
+    assert "自包含" in tools["skill"].invoke({"name": "frontend-design"})
+
+    async def run():
+        return await tools["script_runner"].ainvoke(
+            {"args": {"skill": "frontend-design", "script": "render_page.py",
+                      "script_args": {"title": "测试页", "html": "<h1>你好</h1>"}},
+             "id": "fd1", "name": "script_runner", "type": "tool_call"},
+            config={"metadata": {"request_id": "r1"}},
+        )
+
+    msg = asyncio.run(run())
+    assert "已生成 site.html" in msg.content
+    assert msg.artifact and msg.artifact[0]["file_name"] == "site.html"
