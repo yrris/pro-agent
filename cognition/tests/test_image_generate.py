@@ -116,3 +116,75 @@ def test_openai_payload_and_parse():
 def test_openai_factory_selection():
     p = build_image_provider(Settings(image_gen_provider="openai", image_gen_api_key="k"))
     assert type(p).__name__ == "OpenAIImageProvider"
+
+
+def test_openai_edit_form_no_forbidden_fields():
+    """Y2：/images/edits 表单——不含 response_format/input_fidelity（gpt-image-2 会 400）；
+    尺寸回落 auto；n 夹取。图片走 multipart files 不在此。"""
+    from cognition.providers.image.openai import build_openai_edit_form
+
+    f = build_openai_edit_form("gpt-image-2", "把猫变成橘色", "1024x1024", "low", 9)
+    assert f["prompt"] == "把猫变成橘色" and f["quality"] == "low"
+    assert f["n"] == "4" and f["size"] == "1024x1024"
+    assert "response_format" not in f and "input_fidelity" not in f
+    assert build_openai_edit_form("m", "x", "512x512", "", 1)["size"] == "auto"
+
+
+def test_image_generate_source_images_whitelist_and_mode():
+    """Y2：source_images 按本 run 附件白名单解析；未知名回工具文本自纠；传了走图生图。"""
+    import asyncio as _a
+
+    class SpyProvider:
+        def __init__(self):
+            self.got_images = None
+
+        async def generate(self, prompt, *, images=None, size="1024x1024", n=1):
+            self.got_images = images
+            return [b"\x89PNG\r\n\x1a\n"]  # 单张假 PNG
+
+    prov = SpyProvider()
+    tool = build_image_generate_tool(prov, Settings())
+    meta = {"request_id": "run-e",
+            "attachments": '[{"resource_key":"uploads/u/s/aa-cat.png","file_name":"cat.png"}]'}
+
+    # 未知文件名 → 工具文本自纠，不调 provider。
+    msg_bad = _a.run(tool.ainvoke(
+        {"args": {"prompt": "改色", "source_images": ["ghost.png"]}, "id": "i1",
+         "name": "image_generate", "type": "tool_call"},
+        config={"metadata": meta}))
+    assert "不存在" in msg_bad.content and prov.got_images is None
+
+    # 白名单命中 → 走图生图（provider 收到 bytes；下载器需 mock）。
+    from cognition import attachments as _att
+
+    orig = _att.MinioDownloader
+    _att.MinioDownloader = lambda settings: (lambda key: b"SRCBYTES")  # noqa: E731
+    try:
+        msg_ok = _a.run(tool.ainvoke(
+            {"args": {"prompt": "把猫变橘色", "source_images": ["cat.png"]}, "id": "i2",
+             "name": "image_generate", "type": "tool_call"},
+            config={"metadata": meta}))
+    finally:
+        _att.MinioDownloader = orig
+    assert "图生图" in msg_ok.content
+    assert prov.got_images == [b"SRCBYTES"]
+
+
+def test_image_generate_text_to_image_no_sources():
+    """无 source_images → 文生图（provider images=None）。"""
+    import asyncio as _a
+
+    class Spy:
+        def __init__(self):
+            self.images = "unset"
+
+        async def generate(self, prompt, *, images=None, size="1024x1024", n=1):
+            self.images = images
+            return [b"\x89PNG\r\n\x1a\n"]
+
+    s = Spy()
+    tool = build_image_generate_tool(s, Settings())
+    msg = _a.run(tool.ainvoke(
+        {"args": {"prompt": "水墨山水"}, "id": "i3", "name": "image_generate", "type": "tool_call"},
+        config={"metadata": {"request_id": "r"}}))
+    assert "文生图" in msg.content and s.images is None

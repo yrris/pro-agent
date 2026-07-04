@@ -31,6 +31,22 @@ def build_openai_image_payload(
     }
 
 
+def build_openai_edit_form(model: str, prompt: str, size: str, quality: str, n: int) -> dict[str, str]:
+    """/images/edits 的表单字段（纯函数，可测）。**不含 response_format（gpt-image 默认
+    b64_json）、不含 input_fidelity（gpt-image-2 不支持）**；图片走 multipart files 的
+    可重复字段 image[]，不在此。size 非法回落 auto。"""
+    sz = size.replace("*", "x")
+    if sz not in _VALID_SIZES:
+        sz = "auto"
+    return {
+        "model": model,
+        "prompt": prompt,
+        "size": sz,
+        "quality": quality or "low",
+        "n": str(max(1, min(int(n), 4))),
+    }
+
+
 def parse_openai_images(data: dict[str, Any]) -> list[bytes]:
     """响应 → 图片字节列表（纯函数，可测）；形状异常抛 ValueError。"""
     items = data.get("data") or []
@@ -54,15 +70,26 @@ class OpenAIImageProvider:
         self,
         prompt: str,
         *,
-        images: Optional[list[bytes]] = None,  # 图生图（edits 端点）留 seam，v1 忽略
+        images: Optional[list[bytes]] = None,  # 传了→图生图走 /images/edits(multipart)
         size: str = "1024x1024",
         n: int = 1,
     ) -> list[bytes]:
+        headers = {"Authorization": f"Bearer {self._api_key}"}
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(
-                f"{self._base}/images/generations",
-                headers={"Authorization": f"Bearer {self._api_key}"},
-                json=build_openai_image_payload(self._model, prompt, size, self._quality, n),
-            )
+            if images:
+                # 图生图：multipart，图片用可重复字段名 image[]（OpenAI 契约），其余走表单。
+                files = [("image[]", (f"src-{i}.png", buf, "image/png")) for i, buf in enumerate(images)]
+                resp = await client.post(
+                    f"{self._base}/images/edits",
+                    headers=headers,
+                    data=build_openai_edit_form(self._model, prompt, size, self._quality, n),
+                    files=files,
+                )
+            else:
+                resp = await client.post(
+                    f"{self._base}/images/generations",
+                    headers=headers,
+                    json=build_openai_image_payload(self._model, prompt, size, self._quality, n),
+                )
             resp.raise_for_status()
             return parse_openai_images(resp.json())
