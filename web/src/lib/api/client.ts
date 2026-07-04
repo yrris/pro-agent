@@ -22,6 +22,7 @@ export interface StartRunArgs {
   agentType: string; // "react" | "plan_solve" | "deep_research"
   attachments?: AttachmentRef[];
   outputFormat?: string; // M9：html/docs/ppt/table（空=自由格式）
+  imageGen?: boolean; // 生图开关：置位则后端注入生图指令（可配合上传图做图生图 + 输出格式嵌入）
 }
 
 export interface RunHandle {

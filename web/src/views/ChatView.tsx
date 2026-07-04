@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Loader2, Paperclip, RotateCw, X } from "lucide-react";
+import { ArrowUp, ImagePlus, Loader2, Paperclip, RotateCw, X } from "lucide-react";
 import { MessageList } from "../components/chat";
 import { FilesPanel } from "../components/FilesPanel";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
@@ -72,7 +72,7 @@ function Composer({
 }: {
   disabled: boolean;
   placeholder: string;
-  onSubmit: (q: string, attachments?: AttachmentRef[], outputFormat?: string) => void;
+  onSubmit: (q: string, attachments?: AttachmentRef[], outputFormat?: string, imageGen?: boolean) => void;
   uploadSessionId: string;
   agentType: string;
   onAgentType: (v: string) => void;
@@ -80,6 +80,7 @@ function Composer({
   const [text, setText] = useState("");
   const [atts, setAtts] = useState<PendingAttachment[]>([]);
   const [format, setFormat] = useState("");
+  const [imageGen, setImageGen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const doUpload = (item: PendingAttachment) => {
@@ -107,7 +108,7 @@ function Composer({
     const q = text.trim();
     if (!q || disabled || uploading) return;
     const refs = atts.filter((a) => a.status === "done" && a.ref).map((a) => a.ref!) ;
-    onSubmit(q, refs.length ? refs : undefined, format || undefined);
+    onSubmit(q, refs.length ? refs : undefined, format || undefined, imageGen || undefined);
     setText("");
     setAtts([]);
   };
@@ -163,12 +164,23 @@ function Composer({
           >
             <Paperclip />
           </Button>
-          {/* 输出格式（M9）：仅深度思考/深度研究可选（对齐原项目）；值经 startRun.outputFormat 透传 */}
+          {/* 生图开关：置位则本轮走生图指令（上传图→图生图；配合下方格式把图嵌入网页/文档）。 */}
+          <Button
+            variant="ghost"
+            size="icon"
+            title={imageGen ? "生图已开启（再点关闭）" : "开启生图：本轮用文字/上传图生成图片"}
+            aria-pressed={imageGen}
+            onClick={() => setImageGen((v) => !v)}
+            className={imageGen ? "text-primary hover:text-primary" : "text-stone-400 hover:text-foreground"}
+          >
+            <ImagePlus />
+          </Button>
+          {/* 输出格式：非快速模式可选；**生图开启时全模式可选**（把图嵌入网页/文档）。 */}
           <Select value={format || "free"} onValueChange={(v) => setFormat(v === "free" ? "" : v)}>
             <SelectTrigger
               size="sm"
-              disabled={agentType === "react"}
-              title={agentType === "react" ? "快速模式不指定输出格式" : "输出格式"}
+              disabled={agentType === "react" && !imageGen}
+              title={agentType === "react" && !imageGen ? "快速模式不指定输出格式（开启生图后可选）" : "输出格式"}
               className="w-24 shrink-0 border-0 bg-transparent text-stone-400 shadow-none hover:text-foreground"
             >
               <SelectValue />
@@ -235,7 +247,7 @@ export function ChatView({
   live: RunTurn | null;
   status: RunStatus;
   loadingHistory: boolean;
-  onSubmit: (q: string, attachments?: AttachmentRef[], outputFormat?: string) => void;
+  onSubmit: (q: string, attachments?: AttachmentRef[], outputFormat?: string, imageGen?: boolean) => void;
   uploadSessionId: string;
   agentType: string;
   onAgentType: (v: string) => void;

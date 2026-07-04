@@ -32,7 +32,10 @@ func TestAllowedUpload(t *testing.T) {
 		{"application/octet-stream", "app.exe", false}, // 可执行拒绝
 		{"application/zip", "a.zip", false},
 		{"video/mp4", "a.mp4", false},
-		{"application/vnd.openxmlformats-officedocument.wordprocessingml.document", "a.docx", false},
+		// office 文档自 M12 起放行（认知面支持 docx/xlsx 文本提取入库）。
+		{"application/vnd.openxmlformats-officedocument.wordprocessingml.document", "a.docx", true},
+		{"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "a.xlsx", true},
+		{"application/octet-stream", "sheet.xlsx", true}, // 扩展名兜底
 	}
 	for _, c := range cases {
 		if got := api.AllowedUpload(c.mime, c.name); got != c.want {

@@ -35,6 +35,35 @@ def format_prompt_from_config(config: Optional[RunnableConfig], prompts: dict[st
     return prompts.get(fmt, "")
 
 
+# 生图模式指令（Composer 生图开关置位 → metadata.image_gen）：引导模型可靠调用
+# image_generate（含图生图 source_images），并在指定输出格式时用对应技能把图嵌入。
+IMAGE_GEN_INSTRUCTION = (
+    "【生图模式已开启】用户希望本轮生成图片。请务必调用 image_generate 工具产出图片："
+    "prompt 写清主体/风格/构图/光影（可先查 image-style-library 技能的风格模板）。"
+    "若用户上传了图片附件，把其文件名填入 image_generate 的 source_images 参数做图生图/编辑。"
+    "若同时指定了输出格式（如网页/文档/PPT），先生成图片，再用对应技能"
+    "（frontend-design 做网页、ppt-generation 做文档/PPT）把生成的图片与文字一起编排进最终产物。"
+)
+
+
+def leading_prompt_from_config(
+    config: Optional[RunnableConfig], format_prompts: Optional[dict[str, str]]
+) -> str:
+    """把 image_gen 指令与 output_format 提示词拼成**一条** leading system 文本（可空）。
+
+    合并成一条：多条中位/前置 system 消息在续聊切 Claude 时会被 langchain-anthropic 拒；
+    单条 leading 是验证过的安全形态。两者正交，各有则用空行分隔。
+    """
+    parts: list[str] = []
+    meta = (config.get("metadata") or {}) if config else {}
+    if str(meta.get("image_gen", "") or "").lower() in ("1", "true", "yes"):
+        parts.append(IMAGE_GEN_INSTRUCTION)
+    fmt = format_prompt_from_config(config, format_prompts or {})
+    if fmt:
+        parts.append(fmt)
+    return "\n\n".join(parts)
+
+
 def make_think_node(
     model: BaseChatModel,
     *,
@@ -64,11 +93,11 @@ def make_think_node(
             messages = plan_history_reduction(messages, history_policy).messages
         if expander is not None:
             messages = expander(messages)
-        # 输出格式：调用期临时前置 leading SystemMessage（只活在本次 invoke，
-        # 不进 checkpoint；plan 的 executor 分支经 metadata spread 免费获得）。
-        fmt_prompt = format_prompt_from_config(config, format_prompts or {})
-        if fmt_prompt:
-            messages = [SystemMessage(content=fmt_prompt), *messages]
+        # 生图指令 + 输出格式：调用期临时前置**单条** leading SystemMessage（只活在本次
+        # invoke，不进 checkpoint；plan 的 executor 分支经 metadata spread 免费获得）。
+        prefix = leading_prompt_from_config(config, format_prompts)
+        if prefix:
+            messages = [SystemMessage(content=prefix), *messages]
         ai_msg = model.invoke(messages)
         return {"messages": [ai_msg], "step": step + 1}
 

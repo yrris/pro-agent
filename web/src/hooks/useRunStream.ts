@@ -146,6 +146,7 @@ export function useRunStream() {
       sessionId: string,
       attachments?: AttachmentRef[],
       outputFormat?: string,
+      imageGen?: boolean,
     ): Promise<string> => {
       const gen = beginGen();
       archiveLive();
@@ -157,7 +158,7 @@ export function useRunStream() {
       abortRef.current = ac;
       try {
         const { runId, reader } = await startRun(
-          { query, sessionId, agentType, attachments, outputFormat },
+          { query, sessionId, agentType, attachments, outputFormat, imageGen },
           ac.signal,
         );
         if (genRef.current !== gen) return runId;

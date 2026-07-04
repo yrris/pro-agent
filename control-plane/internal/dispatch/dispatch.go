@@ -31,6 +31,7 @@ type StartCommand struct {
 	SessionID    string
 	OwnerID      string
 	OutputFormat string // M9：输出格式（透传认知面 metadata）
+	ImageGen     bool   // 生图开关（透传认知面 metadata["image_gen"]）
 	// M11 HITL：审批恢复三元组（乘 metadata 走既有 Run RPC；空=普通 run）。
 	ApprovalResumeID string
 	ApprovalDecision string // "approved" | "rejected"
@@ -103,7 +104,7 @@ func (d *Dispatcher) Run(ctx context.Context, cmd StartCommand, sink stream.Sink
 		atts = append(atts, cognition.Attachment(a))
 	}
 	st, err := d.client.RunAgent(ctx, cognition.RunRequest{
-		RunID: cmd.RunID, SessionID: cmd.SessionID, Query: cmd.Query, AgentType: agentType, OutputFormat: cmd.OutputFormat,
+		RunID: cmd.RunID, SessionID: cmd.SessionID, Query: cmd.Query, AgentType: agentType, OutputFormat: cmd.OutputFormat, ImageGen: cmd.ImageGen,
 		ApprovalResumeID: cmd.ApprovalResumeID, ApprovalDecision: cmd.ApprovalDecision, ApprovalComment: cmd.ApprovalComment,
 		MaxSteps: d.maxSteps, OwnerID: cmd.OwnerID, Attachments: atts,
 	})

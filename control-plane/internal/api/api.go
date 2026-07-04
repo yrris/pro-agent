@@ -105,6 +105,7 @@ type startRunRequest struct {
 	SessionID    string          `json:"sessionId"`
 	AgentType    string          `json:"agentType"`    // "react"(默认) | "plan_solve" | "deep_research"
 	OutputFormat string          `json:"outputFormat"` // M9：html/docs/ppt/table（空=自由格式）
+	ImageGen     bool            `json:"imageGen"`     // 生图开关：置位则注入生图指令
 	Attachments  []attachmentRef `json:"attachments"`
 }
 
@@ -139,7 +140,7 @@ func (h *handlers) startRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.streamRun(w, r, dispatch.StartCommand{
-		SessionID: sessionID, OwnerID: ownerID, Query: body.Query, AgentType: agentType, OutputFormat: body.OutputFormat,
+		SessionID: sessionID, OwnerID: ownerID, Query: body.Query, AgentType: agentType, OutputFormat: body.OutputFormat, ImageGen: body.ImageGen,
 		Attachments: atts,
 	})
 }

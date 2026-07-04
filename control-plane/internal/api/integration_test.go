@@ -191,7 +191,7 @@ func TestEndToEnd_AttachmentsAndOwnerMetadata(t *testing.T) {
 	env := newE2EEnv(t)
 
 	// 1) 合法附件：透传至 proto RunRequest（attachments + metadata.owner_id/output_format/agent_type）。
-	body := `{"query":"这份文档讲什么","sessionId":"sess-att","agentType":"deep_research","outputFormat":"table",` +
+	body := `{"query":"这份文档讲什么","sessionId":"sess-att","agentType":"deep_research","outputFormat":"table","imageGen":true,` +
 		`"attachments":[{"resourceKey":"uploads/u1/sess-att/ab12-doc.txt","fileName":"doc.txt","mimeType":"text/plain","size":6}]}`
 	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(body))
 	req.Header.Set("X-User-Id", "u1")
@@ -218,6 +218,10 @@ func TestEndToEnd_AttachmentsAndOwnerMetadata(t *testing.T) {
 	}
 	if got.GetMetadata()["output_format"] != "table" {
 		t.Fatalf("output_format 未进 metadata: %v", got.GetMetadata())
+	}
+	// 生图开关经 metadata["image_gen"]="1" 透传。
+	if got.GetMetadata()["image_gen"] != "1" {
+		t.Fatalf("image_gen 未进 metadata: %v", got.GetMetadata())
 	}
 
 	// 2) 伪造他人 key → 403，且不落 run、不发 SSE。

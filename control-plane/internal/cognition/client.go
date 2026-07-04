@@ -32,6 +32,7 @@ type RunRequest struct {
 	MaxSteps     int32
 	OwnerID      string // 经 proto metadata["owner_id"] 传认知面（owner 级知识库归属）
 	OutputFormat string // M9：经 metadata["output_format"] 传认知面（html/docs/ppt/table，空=不注入）
+	ImageGen     bool   // 生图开关：经 metadata["image_gen"]="1" 传认知面（false=不注入）
 	// M11 HITL 审批恢复（经 metadata 三键传认知面；认知面据此走 Command(resume) 分支）。
 	ApprovalResumeID string
 	ApprovalDecision string
@@ -111,6 +112,9 @@ func (c *grpcClient) RunAgent(ctx context.Context, req RunRequest) (Stream, erro
 	}
 	if req.OutputFormat != "" {
 		metadata["output_format"] = req.OutputFormat
+	}
+	if req.ImageGen {
+		metadata["image_gen"] = "1"
 	}
 	if req.ApprovalResumeID != "" {
 		metadata["approval_resume_id"] = req.ApprovalResumeID
