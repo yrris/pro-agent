@@ -150,6 +150,10 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	if dsn == "" {
 		t.Skip("TEST_PG_DSN 未设置，跳过端到端集成测试")
 	}
+	// 防误删开发库硬闸：库名须含 test（这些测试会 TRUNCATE runs/events）。
+	if db := dsn[strings.LastIndex(dsn, "/")+1:]; !strings.Contains(db, "test") {
+		t.Fatalf("拒绝对库 %q 跑会 TRUNCATE 的集成测试（会清空开发库对话历史）——TEST_PG_DSN 须指向含 test 的库", db)
+	}
 	ctx := context.Background()
 	pool, err := store.NewPool(ctx, dsn)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,14 +17,34 @@ import (
 
 const ts = int64(1700000000000)
 
+// GuardTestDSN 是**防误删开发库的硬闸**：这些测试开头会 TRUNCATE runs/events，
+// 若 TEST_PG_DSN 指向开发库 my_agent 就会清空真实对话历史（踩过两次的坑）。
+// 因此库名必须显式含 "test"（如 my_agent_test，见 `make test-db`），否则直接 Fatal，
+// **在 TRUNCATE 之前**挡下。导出给 api 包的集成测试共用。
+func GuardTestDSN(t *testing.T, dsn string) {
+	t.Helper()
+	db := dsn
+	if i := strings.LastIndex(db, "/"); i >= 0 {
+		db = db[i+1:]
+	}
+	if i := strings.IndexAny(db, "?"); i >= 0 {
+		db = db[:i]
+	}
+	if !strings.Contains(db, "test") {
+		t.Fatalf("拒绝对库 %q 跑会 TRUNCATE 的测试（会清空开发库对话历史）——"+
+			"请把 TEST_PG_DSN 指向独立测试库（库名须含 test，如 my_agent_test；见 make test-db）", db)
+	}
+}
+
 // 集成测试需要一个 PostgreSQL。设置 TEST_PG_DSN 后运行；否则跳过。
-// 例：TEST_PG_DSN=postgres://agent:agent_pwd@localhost:55432/my_agent go test ./internal/store/...
+// 例：TEST_PG_DSN=postgres://agent:agent_pwd@localhost:55432/my_agent_test go test ./internal/store/...
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("TEST_PG_DSN")
 	if dsn == "" {
 		t.Skip("TEST_PG_DSN 未设置，跳过 store 集成测试")
 	}
+	GuardTestDSN(t, dsn)
 	ctx := context.Background()
 	pool, err := store.NewPool(ctx, dsn)
 	if err != nil {

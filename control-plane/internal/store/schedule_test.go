@@ -15,6 +15,7 @@ func TestScheduleClaimSemantics(t *testing.T) {
 	if dsn == "" {
 		t.Skip("TEST_PG_DSN 未设置")
 	}
+	GuardTestDSN(t, dsn)
 	ctx := context.Background()
 	pool, err := store.NewPool(ctx, dsn)
 	if err != nil {
