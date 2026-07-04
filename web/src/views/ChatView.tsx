@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, ImagePlus, Loader2, Paperclip, RotateCw, Square, X } from "lucide-react";
+import { ArrowUp, Check, ImagePlus, Loader2, Paperclip, RotateCw, Square, X } from "lucide-react";
 import { MessageList } from "../components/chat";
 import { FilesPanel } from "../components/FilesPanel";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
 import type { RunStatus, RunTurn } from "../hooks/useRunStream";
 import { AGENT_TYPES, OUTPUT_FORMATS, SAMPLE_QUESTIONS } from "../config";
-import { uploadFile, type AttachmentRef } from "../lib/api/client";
-import { Badge } from "@/components/ui/badge";
+import { uploadFileWithProgress, type AttachmentRef } from "../lib/api/client";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -24,9 +23,33 @@ interface PendingAttachment {
   file: File;
   status: "uploading" | "done" | "error";
   ref?: AttachmentRef;
+  progress: number; // 0..1，上传进度（XHR onprogress 回填）
+  previewUrl?: string; // 图片附件的本地 object URL（缩略图）
 }
 
 const ACCEPT = ".png,.jpg,.jpeg,.webp,.gif,.txt,.md,.markdown,.csv,.json,.xml,.yaml,.yml,.log,.pdf,.docx,.xlsx";
+
+// 上传进度圆环：SVG 圆用 stroke-dashoffset 表示 0..1 逐渐占满（透明底 + 珊瑚橙进度）。
+function ProgressRing({ pct }: { pct: number }) {
+  const r = 9;
+  const c = 2 * Math.PI * r;
+  return (
+    <svg viewBox="0 0 24 24" className="size-5 -rotate-90">
+      <circle cx="12" cy="12" r={r} fill="none" strokeWidth="2.5" className="stroke-stone-600/40" />
+      <circle
+        cx="12"
+        cy="12"
+        r={r}
+        fill="none"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        className="stroke-primary transition-[stroke-dashoffset] duration-150"
+        strokeDasharray={c}
+        strokeDashoffset={c * (1 - Math.max(0, Math.min(1, pct)))}
+      />
+    </svg>
+  );
+}
 
 function AttachmentChips({
   items,
@@ -39,25 +62,67 @@ function AttachmentChips({
 }) {
   if (items.length === 0) return null;
   return (
-    <div className="mb-2 flex flex-wrap gap-1.5">
-      {items.map((a) => (
-        <Badge
-          key={a.id}
-          variant="outline"
-          className={`gap-1 font-normal ${a.status === "error" ? "border-rose-500/40 text-rose-300" : "text-stone-300"}`}
-        >
-          {a.status === "uploading" && <Loader2 className="animate-spin" />}
-          <span className="max-w-40 truncate">{a.file.name}</span>
-          {a.status === "error" && (
-            <button onClick={() => onRetry(a.id)} title="上传失败，点击重试" className="hover:text-rose-100">
-              <RotateCw className="size-3" />
+    <div className="mb-2 flex flex-wrap gap-2">
+      {items.map((a) => {
+        const err = a.status === "error";
+        return (
+          <div
+            key={a.id}
+            className={`group relative flex items-center gap-2 rounded-lg border py-1.5 pl-1.5 pr-7 ${
+              err ? "border-rose-500/40 bg-rose-500/5" : "border-border bg-card"
+            }`}
+          >
+            {/* 缩略图（图片）或文件角标；上传中盖一层进度圆环，完成盖绿对勾 */}
+            <div className="relative flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-black/20">
+              {a.previewUrl ? (
+                <img src={a.previewUrl} alt={a.file.name} className="size-full object-cover" />
+              ) : (
+                <span className="text-[9px] uppercase text-stone-400">
+                  {(a.file.name.split(".").pop() || "file").slice(0, 4)}
+                </span>
+              )}
+              {a.status === "uploading" && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/45">
+                  <ProgressRing pct={a.progress} />
+                </div>
+              )}
+              {a.status === "done" && (
+                <div className="absolute right-0 bottom-0 rounded-full bg-background/80 p-0.5">
+                  <Check className="size-3 text-emerald-400" />
+                </div>
+              )}
+            </div>
+            <div className="min-w-0">
+              <div className={`max-w-36 truncate text-xs ${err ? "text-rose-300" : "text-stone-200"}`}>
+                {a.file.name}
+              </div>
+              <div className="text-[10px] text-stone-500">
+                {a.status === "uploading"
+                  ? `上传中 ${Math.round(a.progress * 100)}%`
+                  : err
+                    ? "上传失败"
+                    : "已就绪"}
+              </div>
+            </div>
+            {err && (
+              <button
+                onClick={() => onRetry(a.id)}
+                title="重试"
+                className="absolute right-7 top-1/2 -translate-y-1/2 rounded p-1 text-rose-300 hover:text-rose-100"
+              >
+                <RotateCw className="size-3" />
+              </button>
+            )}
+            <button
+              onClick={() => onRemove(a.id)}
+              title="移除"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-stone-500 hover:text-stone-200"
+            >
+              <X className="size-3.5" />
             </button>
-          )}
-          <button onClick={() => onRemove(a.id)} title="移除" className="hover:text-stone-100">
-            <X className="size-3" />
-          </button>
-        </Badge>
-      ))}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -88,19 +153,27 @@ function Composer({
   const fileRef = useRef<HTMLInputElement>(null);
 
   const doUpload = (item: PendingAttachment) => {
-    setAtts((xs) => xs.map((x) => (x.id === item.id ? { ...x, status: "uploading" } : x)));
-    uploadFile(item.file, uploadSessionId)
+    setAtts((xs) => xs.map((x) => (x.id === item.id ? { ...x, status: "uploading", progress: 0 } : x)));
+    uploadFileWithProgress(item.file, uploadSessionId, (pct) =>
+      setAtts((xs) => xs.map((x) => (x.id === item.id ? { ...x, progress: pct } : x))),
+    )
       .then((ref) =>
-        setAtts((xs) => xs.map((x) => (x.id === item.id ? { ...x, status: "done", ref } : x))),
+        setAtts((xs) => xs.map((x) => (x.id === item.id ? { ...x, status: "done", progress: 1, ref } : x))),
       )
-      .catch(() =>
-        setAtts((xs) => xs.map((x) => (x.id === item.id ? { ...x, status: "error" } : x))),
-      );
+      .catch(() => setAtts((xs) => xs.map((x) => (x.id === item.id ? { ...x, status: "error" } : x))));
   };
 
   const onPick = (files: FileList | null) => {
     for (const f of Array.from(files ?? [])) {
-      const item: PendingAttachment = { id: `${Date.now()}-${f.name}`, file: f, status: "uploading" };
+      // 图片给个本地缩略图（object URL 在移除/发送时回收，见 removeAtt/submit）。
+      const previewUrl = f.type.startsWith("image/") ? URL.createObjectURL(f) : undefined;
+      const item: PendingAttachment = {
+        id: `${Date.now()}-${f.name}`,
+        file: f,
+        status: "uploading",
+        progress: 0,
+        previewUrl,
+      };
       setAtts((xs) => [...xs, item]);
       doUpload(item);
     }
@@ -117,6 +190,7 @@ function Composer({
     const fmtApplicable = agentType !== "react" || imageGen;
     onSubmit(q, refs.length ? refs : undefined, (fmtApplicable && format) || undefined, imageGen || undefined);
     setText("");
+    atts.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
     setAtts([]);
   };
   return (
@@ -127,7 +201,13 @@ function Composer({
         <div className="px-3 pt-2">
           <AttachmentChips
             items={atts}
-            onRemove={(id) => setAtts((xs) => xs.filter((x) => x.id !== id))}
+            onRemove={(id) =>
+              setAtts((xs) => {
+                const t = xs.find((x) => x.id === id);
+                if (t?.previewUrl) URL.revokeObjectURL(t.previewUrl);
+                return xs.filter((x) => x.id !== id);
+              })
+            }
             onRetry={(id) => {
               const item = atts.find((x) => x.id === id);
               if (item) doUpload(item);

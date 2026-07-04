@@ -71,6 +71,34 @@ export async function uploadFile(
   return (await res.json()) as AttachmentRef;
 }
 
+// 带上传进度的附件上传：fetch 无法报告 request-body 上传进度，故用 XHR 订阅
+// xhr.upload.onprogress。同样**只设 X-User-Id**，绝不手设 Content-Type（浏览器自动生成
+// multipart boundary）。onProgress 回 0..1；响应在 loaded===total 之后到，故 done 判 onload。
+export function uploadFileWithProgress(
+  file: File,
+  sessionId: string,
+  onProgress: (pct: number) => void,
+  signal?: AbortSignal,
+): Promise<AttachmentRef> {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/uploads?sessionId=${encodeURIComponent(sessionId)}`);
+    xhr.setRequestHeader("X-User-Id", getUserId() || "anonymous");
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.loaded / e.total);
+    };
+    xhr.onload = () =>
+      xhr.status >= 200 && xhr.status < 300
+        ? resolve(JSON.parse(xhr.responseText) as AttachmentRef)
+        : reject(new Error(`upload failed: ${xhr.status}`));
+    xhr.onerror = () => reject(new Error("upload failed: network"));
+    if (signal) signal.addEventListener("abort", () => xhr.abort());
+    xhr.send(fd);
+  });
+}
+
 // 下载 artifact：必须带 X-User-Id（owner 校验），故用 fetch→blob→a[download]，不能裸 <a href>。
 export async function downloadArtifact(resourceKey: string, fileName: string): Promise<void> {
   const res = await fetch(`/artifacts/${resourceKey}`, { headers: headers() });
