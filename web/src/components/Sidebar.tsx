@@ -4,6 +4,7 @@ import {
   ChartColumn,
   Database,
   FolderOpen,
+  GitBranch,
   LogOut,
   ImagePlus,
   MessageSquare,
@@ -67,7 +68,15 @@ function SessionRow({
       }`}
     >
       <button onClick={onSelect} className="block w-full p-2 pr-8 text-left">
-        <div className="truncate text-sm text-stone-200">{s.title || "（无标题）"}</div>
+        <div className="flex items-center gap-1">
+          {/* docs/14：分叉会话标记（继承父会话历史的新时间线） */}
+          {s.forkedFrom && (
+            <span title="分叉会话" className="shrink-0 text-stone-500">
+              <GitBranch className="size-3" />
+            </span>
+          )}
+          <div className="truncate text-sm text-stone-200">{s.title || "（无标题）"}</div>
+        </div>
         <div className="mt-0.5 flex items-center gap-1 text-[10px] text-stone-500">
           <span>{s.agentType}</span>
           <span>·</span>

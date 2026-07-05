@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, ImagePlus, Loader2, Paperclip, RotateCw, Square, X } from "lucide-react";
+import { ArrowUp, Check, GitBranch, ImagePlus, Loader2, Paperclip, RotateCw, Square, X } from "lucide-react";
 import { MessageList } from "../components/chat";
 import { FilesPanel } from "../components/FilesPanel";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
@@ -346,6 +346,7 @@ export function ChatView({
   onArtifactsWidthChange,
   onApprovalDecision,
   onStop,
+  onForkTurn,
 }: {
   visible: boolean;
   timeline: RunTurn[];
@@ -367,6 +368,8 @@ export function ChatView({
     comment?: string,
   ) => Promise<boolean> | void;
   onStop: () => void;
+  // docs/14 会话分叉：从某轮之后分叉（组合层调 forkSession → 刷列表 → 切入新会话）。
+  onForkTurn?: (afterRunId: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -450,21 +453,64 @@ export function ChatView({
             </div>
           ) : (
             <div className="mx-auto max-w-3xl">
-              {timeline.map((turn, i) => (
-                <div key={turn.runId} className="mb-6">
-                  <MessageList
-                    state={turn.state}
-                    query={turn.query}
-                    attachments={turn.attachments}
-                    onApprovalDecision={i === timeline.length - 1 && !live ? onApprovalDecision : undefined}
-                  />
-                  {turn.failed && (
-                    <div className="mt-1 text-xs text-amber-400">
-                      ⚠ 此轮未走到终态（中断/出错/仍在运行），仅展示已落库部分
-                    </div>
-                  )}
-                </div>
-              ))}
+              {timeline.map((turn, i) => {
+                // docs/14：分叉锚点只对**已终态轮**开放（RUNNING 快照未收口，服务端也会 409）。
+                // 终态判据：回放轮看服务端 status（SUCCESS/FAILED/STOPPED/TIMEOUT 皆可分叉）；
+                // 实时归档轮无 status，以"见过 finish 帧"兜底。
+                const terminal = turn.state.finished || (!!turn.status && turn.status !== "RUNNING");
+                return (
+                  <div key={turn.runId} className="group/turn mb-6">
+                    {turn.inherited && (
+                      <div
+                        className="mb-1 flex items-center gap-1 text-[10px] text-stone-500"
+                        title="继承自父会话的历史轮（只读投影，原轮原事件）"
+                      >
+                        <GitBranch className="size-3" />
+                        继承
+                      </div>
+                    )}
+                    <MessageList
+                      state={turn.state}
+                      query={turn.query}
+                      attachments={turn.attachments}
+                      inherited={turn.inherited}
+                      // docs/14 §4.4：审批决议属于父会话时间线。继承轮的 pending 审批卡若可
+                      // 操作，决议 run 会落回父会话（分叉视图刷新后消失）——继承轮一律只读。
+                      onApprovalDecision={i === timeline.length - 1 && !live && !turn.inherited ? onApprovalDecision : undefined}
+                    />
+                    {turn.failed && (
+                      <div className="mt-1 text-xs text-amber-400">
+                        ⚠ 此轮未走到终态（中断/出错/仍在运行），仅展示已落库部分
+                      </div>
+                    )}
+                    {/* hover 操作区：从此轮分叉（继承轮同样可为锚——"分叉的分叉"）。 */}
+                    {onForkTurn && terminal && status !== "running" && (
+                      <div className="mt-1 flex justify-end opacity-0 transition-opacity group-hover/turn:opacity-100">
+                        <button
+                          data-testid="fork-turn"
+                          title="从此轮分叉"
+                          onClick={() => onForkTurn(turn.runId)}
+                          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-stone-500 hover:bg-accent/60 hover:text-foreground"
+                        >
+                          <GitBranch className="size-3.5" />
+                          从此轮分叉
+                        </button>
+                      </div>
+                    )}
+                    {/* 分叉分界线：最后一条继承轮与首条 own 轮之间（own 轮未产生时垫在时间线尾）。 */}
+                    {turn.inherited && !timeline[i + 1]?.inherited && (
+                      <div
+                        data-testid="fork-divider"
+                        className="mt-5 flex items-center gap-2 text-[11px] text-stone-500"
+                      >
+                        <div className="h-px flex-1 bg-border" />
+                        <span>⑂ 从此处分叉</span>
+                        <div className="h-px flex-1 bg-border" />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
               {live && <MessageList state={live.state} query={live.query} attachments={live.attachments} running={status === "running"} onApprovalDecision={onApprovalDecision} />}
               {live?.failed && status !== "running" && (
                 // 中断/未终态的当前轮：显式标记，否则冻结的部分回答与"完成"无从区分。

@@ -10,7 +10,7 @@ import { KnowledgePanel } from "./components/FilesPanel";
 import { SchedulesPanel } from "./components/SchedulesPanel";
 import { ArtifactsGallery } from "./components/ArtifactsGallery";
 import { GenerateWorkspace } from "./components/GenerateWorkspace";
-import { deleteSession, listServerSessions, type AttachmentRef, type ServerSession } from "./lib/api/client";
+import { deleteSession, forkSession, listServerSessions, type AttachmentRef, type ServerSession } from "./lib/api/client";
 import {
   createSession,
   listSessions as listLocalSessions,
@@ -122,6 +122,23 @@ export default function App() {
     [ensureSessionId, agentType, run, refreshSessions],
   );
 
+  // docs/14 会话分叉：登记 fork（新会话）→ 刷列表（分叉标记/0-run 会话可见）→ 切入
+  // 新会话（loadSession 回放继承轮 + 分界线）。复用 selectSession 既有单向数据流。
+  const onForkTurn = useCallback(
+    async (afterRunId: string) => {
+      if (!currentSessionId) return;
+      try {
+        const newId = await forkSession(currentSessionId, afterRunId);
+        toast.success("已从该轮分叉出新会话");
+        void refreshSessions();
+        void selectSession(newId);
+      } catch {
+        toast.error("分叉失败：该轮可能仍在运行或已被删除");
+      }
+    },
+    [currentSessionId, refreshSessions, selectSession],
+  );
+
   // M11 HITL：审批决议（稳定引用——MessageList memo 纪律）。
   const onApprovalDecision = useCallback(
     async (runId: string, approvalId: string, approved: boolean, comment?: string): Promise<boolean> => {
@@ -222,6 +239,7 @@ export default function App() {
             onArtifactsWidthChange={(w) => setArtifactsWidth(clampArtifactsWidth(w))}
             onApprovalDecision={onApprovalDecision}
             onStop={run.stop}
+            onForkTurn={(afterRunId) => void onForkTurn(afterRunId)}
           />
         </div>
         {activeNav === "generate" && <GenerateWorkspace />}

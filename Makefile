@@ -1,6 +1,6 @@
 TEST_PG_DSN ?= postgres://agent:agent_pwd@localhost:55432/my_agent_test
 
-.PHONY: help proto proto-tools proto-go proto-py infra-up infra-down cognition control web check web-build stack-up stack-down stack-down-all
+.PHONY: help proto proto-tools proto-go proto-py infra-up infra-down cognition control web check test-db web-build e2e stack-up stack-down stack-down-all
 
 # 读取 deploy/.env 并导出给应用进程（deploy/.env 不提交；含密钥与模型/连接配置）。
 LOAD_ENV = set -a; [ -f deploy/.env ] && . ./deploy/.env; set +a;
@@ -54,6 +54,9 @@ infra-down: ## 停本地依赖
 
 web-build: ## 前端生产构建（web/dist，供 WEB_DIR 托管）
 	cd web && npm run build
+
+e2e: test-db web-build ## E2E 浏览器测试（Playwright；FAKE 全家桶+my_agent_test 库+:18080，docs/11 §4。首次先 cd web && npx playwright install chromium）
+	cd web && npx playwright test
 
 stack-up: ## 一键起完整平台（基础设施+控制面+认知面，前端单端口 :8080）
 	cd deploy && docker compose --profile app up -d --build

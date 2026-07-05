@@ -78,6 +78,7 @@ export interface ServerSessionLike {
   runCount: number;
   createdAt: string; // ISO 8601
   lastActiveAt: string; // ISO 8601
+  forkedFrom?: string; // docs/14：父会话 id（分叉会话才有）
 }
 
 // 侧栏渲染用的统一视图：服务端行 + 本地未落库草稿会话。
@@ -89,6 +90,7 @@ export interface SessionView {
   createdAt: number; // epoch ms
   lastActiveAt: number; // epoch ms
   pendingLocal: boolean; // true = 仅存在于本地缓存（尚无 run 落库）
+  forkedFrom?: string; // docs/14：分叉会话的父会话 id（侧栏画分叉标记）
 }
 
 // 纯函数核心：合并服务端列表（权威）与本地草稿（补充），按 lastActiveAt 降序。
@@ -105,6 +107,7 @@ export function mergeSessions(server: ServerSessionLike[], local: SessionMeta[])
     createdAt: Date.parse(s.createdAt) || 0,
     lastActiveAt: Date.parse(s.lastActiveAt) || 0,
     pendingLocal: false,
+    forkedFrom: s.forkedFrom,
   }));
   const known = new Set(views.map((v) => v.id));
   for (const l of local) {

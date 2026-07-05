@@ -23,12 +23,16 @@ export type RunStatus = "idle" | "running" | "done" | "error";
 // 一轮对话 = 一个 run：用户 query + 归并后的 RunState。
 // failed=true 表示该轮未走到终态（中断/出错/仍在服务端运行），UI 加标记提示。
 // attachments 仅当前会话的实时轮携带（历史回放轮无附件元数据=已知限制，M8 记录）。
+// inherited/status 来自 loadSession 的 run 元数据（docs/14）：inherited=继承自父会话的
+// 只读投影轮（分叉分界线/角标据此渲染）；status=服务端 run 终态（分叉锚点只对已终态轮开放）。
 export interface RunTurn {
   runId: string;
   query: string;
   state: RunState;
   failed?: boolean;
   attachments?: AttachmentRef[];
+  inherited?: boolean;
+  status?: string;
 }
 
 export function useRunStream() {
@@ -214,7 +218,14 @@ export function useRunStream() {
             st = applyFrame(st, frame);
           }
           if (genRef.current !== gen) return null;
-          turns.push({ runId: meta.runId, query: meta.query, state: st, failed: !st.finished });
+          turns.push({
+            runId: meta.runId,
+            query: meta.query,
+            state: st,
+            failed: !st.finished,
+            inherited: meta.inherited,
+            status: meta.status,
+          });
           setTimeline([...turns]);
         }
         return metas;

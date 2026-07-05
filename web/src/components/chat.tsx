@@ -142,13 +142,17 @@ function Conclusion({ text }: { text: string }) {
 
 // M11 HITL：人工审批卡。live/最后一轮可操作（onDecide 传入且 pending）；
 // 其余（历史回放/已决议）只读展示。决议后按钮即禁用（本地补丁 + 后端幂等校验双保险）。
+// docs/14 fork：分叉会话继承轮的 pending 卡恒只读（inherited），并提示去源会话处理——
+// 决议 API 按 run 归属会话恢复，从分叉视图操作会把决议 run 落回父会话时间线。
 export function ApprovalCard({
   approval,
   onDecide,
+  inherited,
 }: {
   approval: ApprovalView;
   // 返回决议是否成功——失败（网络/429/无 pending）时重置 busy 让卡可重试。
   onDecide?: (approvalId: string, approved: boolean, comment?: string) => Promise<boolean> | void;
+  inherited?: boolean;
 }) {
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
@@ -167,8 +171,15 @@ export function ApprovalCard({
         <span className="text-stone-300">{approval.toolName}</span>
         {approval.status === "approved" && <Badge className="bg-emerald-500/15 text-emerald-300">已批准</Badge>}
         {approval.status === "rejected" && <Badge className="bg-rose-500/15 text-rose-300">已拒绝</Badge>}
-        {pending && !onDecide && <Badge className="bg-amber-500/15 text-amber-300">等待决议</Badge>}
+        {pending && !onDecide && (
+          <Badge className="bg-amber-500/15 text-amber-300">{inherited ? "属于源会话" : "等待决议"}</Badge>
+        )}
       </div>
+      {pending && inherited && (
+        <div className="mb-2 text-xs text-stone-400" data-testid="approval-inherited-hint">
+          此审批属于源会话，请在源会话中处理。
+        </div>
+      )}
       {approval.reason && <div className="mb-2 text-xs text-stone-400">{approval.reason}</div>}
       {approval.input != null && (
         <pre className="mb-2 overflow-auto rounded-lg bg-black/30 p-2 text-xs text-stone-200">
@@ -224,12 +235,15 @@ export const MessageList = memo(function MessageList({
   query,
   attachments,
   running,
+  inherited,
   onApprovalDecision,
 }: {
   state: RunState;
   query?: string;
   attachments?: AttachmentRef[];
   running?: boolean;
+  // docs/14 fork：本轮是否为继承轮（审批卡据此渲染"去源会话处理"只读提示）。
+  inherited?: boolean;
   // M11：仅 live 轮/最后一轮传入（历史回放只读）；带上本轮 runId（恢复不依赖 liveRef）。
   onApprovalDecision?: (
     runId: string,
@@ -274,7 +288,7 @@ export const MessageList = memo(function MessageList({
             const onDecide = onApprovalDecision
               ? (aid: string, ap: boolean, c?: string) => onApprovalDecision(state.runId, aid, ap, c)
               : undefined;
-            return <ApprovalCard key={k} approval={a} onDecide={onDecide} />;
+            return <ApprovalCard key={k} approval={a} onDecide={onDecide} inherited={inherited} />;
           }
           case "result":
             return state.result ? <Conclusion key={k} text={state.result.text} /> : null;

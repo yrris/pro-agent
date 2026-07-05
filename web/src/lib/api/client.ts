@@ -131,6 +131,7 @@ export interface ServerSession {
   runCount: number;
   createdAt: string; // ISO 8601
   lastActiveAt: string; // ISO 8601
+  forkedFrom?: string; // docs/14：父会话 id（分叉会话才有；侧栏据此画分叉标记）
 }
 
 // 会话列表：GET /sessions（runs 表按 owner 聚合，lastActiveAt 降序）。
@@ -158,6 +159,7 @@ export interface SessionRunMeta {
   finalSummary?: string;
   errorMsg?: string;
   createdAt: string; // ISO 8601
+  inherited?: boolean; // docs/14：继承自父会话的只读投影轮（原 runId，回放零改动）
 }
 
 // 会话内 run 元数据（created_at 升序）；事件仍走 GET /runs/{id}/events 逐 run 回放。
@@ -166,6 +168,19 @@ export async function listSessionRuns(sessionId: string, signal?: AbortSignal): 
   if (!res.ok) throw new Error(`listSessionRuns failed: ${res.status}`);
   const body = (await res.json()) as { runs?: SessionRunMeta[] };
   return body.runs ?? [];
+}
+
+// docs/14 会话分叉：POST /sessions/{id}/fork —— 从某轮之后分叉出新会话，返回新 sessionId。
+// 新会话 timeline 继承父会话截至该轮的历史（只读投影）；首条消息触发认知面 checkpoint 播种。
+export async function forkSession(sessionId: string, afterRunId: string): Promise<string> {
+  const res = await fetch(`/sessions/${encodeURIComponent(sessionId)}/fork`, {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify({ afterRunId }),
+  });
+  if (!res.ok) throw new Error(`forkSession failed: ${res.status}`);
+  const body = (await res.json()) as { sessionId: string };
+  return body.sessionId;
 }
 
 export interface HealthReport {
