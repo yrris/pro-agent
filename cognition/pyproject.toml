@@ -31,6 +31,7 @@ dependencies = [
     "openpyxl>=3.1.5",
     "pypdfium2>=4.30",             # C批(docs/13)：扫描 PDF 页栅格化（自带 pdfium wheel，零系统依赖）
     "pillow>=10",                  # C批(docs/13)：栅格位图→PNG/JPEG 编码（原为 fastembed 传递依赖，显式化）
+    "pdfplumber>=0.11.10",       # D1批(docs/15)：PDF 文本页结构化提取（表格/多栏，带入纯 Python pdfminer.six，零系统依赖）
 ]
 
 [project.optional-dependencies]
@@ -45,6 +46,14 @@ skills = [
     "duckdb>=1.0",
     "matplotlib>=3.8",
     "python-pptx>=1.0",
+]
+# OTel 追踪组（docs/18）：`uv sync --extra otel` 才装；不入核心 deps，保 import-guard——
+# 默认离线（未装）时 otel_seam 走 no-op 降级路径，既有测试零回归。
+otel = [
+    "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp>=1.27",
+    "opentelemetry-instrumentation-grpc>=0.48b0",
 ]
 
 [tool.uv]

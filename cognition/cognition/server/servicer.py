@@ -23,6 +23,7 @@ from cognition.attachments import attachment_note, build_attachment_message, nor
 from cognition.config import Settings
 from cognition.events.mapper import EventMapper
 from cognition.observability.langfuse_seam import build_langfuse_callbacks
+from cognition.observability.otel_seam import current_trace_id
 
 logger = logging.getLogger(__name__)
 
@@ -181,9 +182,14 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
         session_id = request.session_id or run_id
         agent_type = request.agent_type or "react"
         # 结构化日志：run_id/session_id/agent_type 关联键（与 Go 侧一致，跨进程串同一 run）。
-        log = logging.LoggerAdapter(
-            logger, {"run_id": run_id, "session_id": session_id, "agent_type": agent_type}
-        )
+        # 启用 OTel 时再补 trace_id（server span 由 aio 拦截器建，与 Go 根 span 同一 trace）：
+        # 可用同一 trace_id grep 两面 stdout JSON（docs/18 §3.4）。未启用/未装 SDK 时
+        # current_trace_id() 返回 None，不落 trace_id，保持零行为变化。
+        adapter_extra = {"run_id": run_id, "session_id": session_id, "agent_type": agent_type}
+        trace_id = current_trace_id()
+        if trace_id:
+            adapter_extra["trace_id"] = trace_id
+        log = logging.LoggerAdapter(logger, adapter_extra)
 
         mapper = EventMapper(run_id, self.tool_providers)
         kb_id = resolve_kb_id(request)

@@ -21,6 +21,7 @@ from cognition.config import Settings, get_settings
 from cognition.graphs.history import HistoryPolicy
 from cognition.graphs.plan_execute import build_plan_execute_graph
 from cognition.graphs.react import build_react_graph
+from cognition.observability import otel_seam
 from cognition.providers.router import select_model
 from cognition.server.servicer import CognitionServicer
 from cognition.sop import default_sop_store
@@ -32,6 +33,10 @@ logger = logging.getLogger(__name__)
 async def serve(settings: Settings | None = None) -> None:
     """启动 gRPC 服务并阻塞直至终止。"""
     settings = settings or get_settings()
+
+    # 可选 OTel 追踪（docs/18，默认关/未装即 no-op）：装配全局 TracerProvider + W3C 传播器。
+    # 必须在建 server 前，让拦截器建的 server span 走到已注册的 provider。
+    otel_seam.setup_tracing(settings)
 
     # 装配期聚合 local + MCP + Skill 工具；provider_map 注入事件映射，tool_closers 停机时关闭。
     tools, provider_map, tool_closers = await build_tool_suite(settings)
@@ -143,7 +148,9 @@ async def serve(settings: Settings | None = None) -> None:
         format_prompts=settings.output_format_prompts,
     )
 
-    server = grpc.aio.server()
+    # 仅 otel_enabled 且 SDK 可用时挂 aio server 拦截器（从 metadata 提取 traceparent
+    # 建 server span 覆盖 servicer.Run）；否则为空列表，等价于无拦截器、零行为变化。
+    server = grpc.aio.server(interceptors=otel_seam.build_server_interceptors(settings))
     agent_pb2_grpc.add_CognitionServiceServicer_to_server(
         CognitionServicer(
             react_graph, settings, plan_graph=plan_graph, research_graph=research_graph,

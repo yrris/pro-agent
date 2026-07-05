@@ -175,6 +175,23 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("COGNITION_LANGFUSE_HOST", "LANGFUSE_HOST"),
     )
 
+    # —— 可选 OTel 追踪（docs/18 seam，默认关，未装也能跑；opentelemetry-* 在 pyproject otel 组）——
+    # 双接 OTel 官方无前缀 env（OTEL_*）与本项目前缀（COGNITION_OTEL_*）。
+    otel_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("COGNITION_OTEL_ENABLED", "OTEL_ENABLED"),
+    )
+    otel_exporter_otlp_endpoint: str = Field(
+        default="http://localhost:4317",
+        validation_alias=AliasChoices(
+            "COGNITION_OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"
+        ),
+    )
+    otel_service_name: str = Field(
+        default="my-agent-cognition",
+        validation_alias=AliasChoices("COGNITION_OTEL_SERVICE_NAME", "OTEL_SERVICE_NAME"),
+    )
+
     # —— M12 工具缺口 ——
     # web_fetch：抓公开网页（SSRF 服务端封禁私网）；关掉则不注册。
     web_fetch_enabled: bool = Field(default=True)

@@ -182,6 +182,25 @@ MAX_OCR_PAGES = 20
 MIN_OCR_TEXT_CHARS = 10
 
 
+# —— D1 批（docs/15）：PDF 文本页结构化提取层（表格 / 多栏 / 公式）参数 ——
+# 仅作用于"文本页"（strip 后 >= SCAN_TEXT_THRESHOLD，原走原样保留分支）；纯 prose 单栏
+# 无表格页保持 plain 逐字节原样（回归红线 test_pure_text_pdf_output_identical，docs/15
+# §3.2）。每个子步骤惰性 import pdfplumber、逐步 try/except 降级回退 plain，绝不炸 run。
+
+# 双栏检测：单侧词数下限——太少不判栏（避免把稀疏页/短标题页误判为两栏）。
+MIN_COLUMN_WORDS = 6
+# 双栏 gutter 中带宽度（占页宽比例）：中线两侧各半带；带内被任何词横占即判"非对半两栏"
+#（贯穿全宽的单行 prose 会横占中带 → 判否 → 保 plain，守住红线）。
+COLUMN_GUTTER_BAND = 0.06
+# 表格采纳下限：低于 2 行 / 2 列的"退化表"忽略——只认真正有行列结构的表。评审 #9 起
+# 抽表仅用 lines 策略（需绘制线），本护栏作为 defense-in-depth 兜底过滤病态单行/单列表。
+TABLE_MIN_ROWS = 2
+TABLE_MIN_COLS = 2
+# 公式启发式：整页数学符号（数学运算符 / 希腊字母 / 上下标等 Unicode 段）计数达此阈值才
+# 触发整页 vision 兜底。保守取值，避免中文（CJK 段不计入）/普通 prose 误触发。
+FORMULA_MIN_SYMBOLS = 8
+
+
 def is_text_like(mime: str, file_name: str = "") -> bool:
     m = (mime or "").lower()
     if m.startswith("text/") or m in _TEXT_MIME_EXACT:
@@ -298,37 +317,219 @@ def _rasterize_pdf_page(data: bytes, page_index: int, *, scale: float = 2.0) -> 
         return None
 
 
+# —— D1 批（docs/15 §3.1）：PDF 文本页结构化提取辅助 ——
+# 全部子步骤对 None/异常一律降级回退 plain（红线：结构不识别时逐字节保留原文本）。
+
+
+def _open_plumber(data: bytes) -> Optional[Any]:
+    """惰性打开 pdfplumber PDF（docs/15 §3.3）：未装/坏字节 → None，文本页回退 plain。
+
+    模块级函数便于离线单测 monkeypatch 注入 fake plumber（伪造 extract_tables /
+    extract_words / crop，不触真依赖）。
+    """
+    try:
+        import pdfplumber  # 惰性：未装则整层降级，对齐仓库解析依赖既定风格
+
+        return pdfplumber.open(io.BytesIO(data))
+    except Exception as exc:  # noqa: BLE001 — 打开失败降级，文本页回退 plain 原样
+        logger.warning("pdfplumber open failed: %s", exc)
+        return None
+
+
+def _plumber_page(plumber: Any, idx: int) -> Optional[Any]:
+    """安全取 pdfplumber 第 idx 页；plumber 为 None / 越界 / 异常 → None（降级）。"""
+    if plumber is None:
+        return None
+    try:
+        pages = plumber.pages
+        return pages[idx] if 0 <= idx < len(pages) else None
+    except Exception as exc:  # noqa: BLE001 — 取页失败降级回退 plain
+        logger.warning("pdfplumber page %s access failed: %s", idx + 1, exc)
+        return None
+
+
+def _table_to_markdown(table: Sequence[Sequence[Any]]) -> Optional[str]:
+    """二维单元格数组 → markdown 表格（继承 docx `" | "` 先例，对 split_text 透明）。
+
+    退化表（去空行后 < TABLE_MIN_ROWS 行或 < TABLE_MIN_COLS 列）返回 None——作为 lines
+    策略抽表的 defense-in-depth 兜底，过滤病态单行/单列表。单元格内换行/竖线做转义避免破坏表结构。
+    """
+    def _cell(v: Any) -> str:
+        s = "" if v is None else str(v)
+        return s.replace("\r", " ").replace("\n", " ").replace("|", r"\|").strip()
+
+    rows = [[_cell(c) for c in (row or [])] for row in table if row is not None]
+    rows = [r for r in rows if any(r)]  # 去空行
+    if len(rows) < TABLE_MIN_ROWS:
+        return None
+    ncol = max(len(r) for r in rows)
+    if ncol < TABLE_MIN_COLS:
+        return None
+    rows = [r + [""] * (ncol - len(r)) for r in rows]  # 补齐短行到等列
+    lines = ["| " + " | ".join(rows[0]) + " |",
+             "| " + " | ".join(["---"] * ncol) + " |"]
+    lines += ["| " + " | ".join(r) + " |" for r in rows[1:]]
+    return "\n".join(lines)
+
+
+def _extract_tables_md(ppage: Any) -> Optional[list[str]]:
+    """pdfplumber 抽表 → markdown 串列表（**仅默认 lines/explicit 策略：需真实绘制的表格线**）；
+    无有效表 / 异常 → None（回退 plain）。退化表由 _table_to_markdown 兜底过滤。
+
+    评审 #9 红线修复：**去掉原 text 策略兜底**。text 策略靠词的 x 对齐推断行列，会把对齐的
+    多行普通 prose（每行几个词、行间 y 对齐）偶合识别成 >=2 行 >=2 列的伪表——退化表护栏
+    （TABLE_MIN_ROWS/COLS=2）拦不住它；命中后整页被追加一段乱切 markdown 表 → 输出不再逐字节
+    一致、build_ingestor 据 transformed 置 dedup_seed，直接破坏 docs/13 §3.3 + docs/15 §3.2
+    『纯文本页逐字节零回归』红线（既有已入库文档漂出新 point、旧点残留）。真正的表格有绘制线
+    （默认 lines 策略即可检出），prose 无线——故只认有线的表；对齐的多栏/prose 不再被误判，
+    正确落到下游『多栏 gutter 检测』或『保持 plain 原样』分支，红线不破而真表仍被抽取。
+    """
+    try:
+        # 仅默认 lines 策略：需真实划线、误报率极低；不再用 text 策略兜底（评审 #9 红线）。
+        tables = ppage.extract_tables() or []
+        mds = [md for t in tables if (md := _table_to_markdown(t))]
+        return mds or None
+    except Exception as exc:  # noqa: BLE001 — 抽表失败降级回退 plain
+        logger.warning("pdfplumber extract_tables failed: %s", exc)
+        return None
+
+
+def _two_column_text(ppage: Any) -> Optional[str]:
+    """两栏对半启发式（docs/15 §3.1）：检出页中部贯通垂直空白 gutter → 裁左右子页各
+    extract_text → 先左后右拼接还原阅读顺序；非两栏 / 异常 → None（回退 plain）。
+
+    gutter 判定：以页宽中线为中心取一条窄带，若任何词横占该带即判"非对半两栏"——贯穿
+    全宽的单行 prose 会横占中带，据此被排除（守红线）；再要求左右两侧各有足量词，排除
+    单栏左/右对齐页。最小版只处理对半两栏（覆盖多数报告/论文正文区，docs/15 §2）。
+    """
+    try:
+        words = ppage.extract_words() or []
+        if len(words) < MIN_COLUMN_WORDS * 2:
+            return None
+        width = float(ppage.width)
+        height = float(ppage.height)
+        mid = width / 2.0
+        band = width * COLUMN_GUTTER_BAND
+        lo, hi = mid - band / 2, mid + band / 2
+        left = right = 0
+        for w in words:
+            x0, x1 = float(w["x0"]), float(w["x1"])
+            if x0 < hi and x1 > lo:
+                return None  # 词横占 gutter 中带 → 非对半两栏（含全宽单行 prose）
+            if (x0 + x1) / 2 < mid:
+                left += 1
+            else:
+                right += 1
+        if left < MIN_COLUMN_WORDS or right < MIN_COLUMN_WORDS:
+            return None  # 一侧太空 → 单栏左/右对齐，非两栏
+        lt = (ppage.crop((0, 0, mid, height)).extract_text() or "").strip()
+        rt = (ppage.crop((mid, 0, width, height)).extract_text() or "").strip()
+        merged = f"{lt}\n{rt}".strip()
+        return merged or None
+    except Exception as exc:  # noqa: BLE001 — 裁列失败降级回退 plain
+        logger.warning("pdfplumber two-column detect failed: %s", exc)
+        return None
+
+
+def _is_math_char(c: str) -> bool:
+    """字符是否落在"数学符号"Unicode 段（公式启发式用）。CJK 段不计入 → 中文不误触发。"""
+    o = ord(c)
+    return (
+        0x2200 <= o <= 0x22FF  # Mathematical Operators（∑∫∏√∞≈≠≤≥∂∇∈∉⊂⊃∪∩…）
+        or 0x2A00 <= o <= 0x2AFF  # Supplemental Mathematical Operators
+        or 0x27C0 <= o <= 0x27EF  # Misc Mathematical Symbols-A
+        or 0x2980 <= o <= 0x29FF  # Misc Mathematical Symbols-B
+        or 0x2070 <= o <= 0x209F  # Superscripts and Subscripts（上标/下标）
+        or 0x0370 <= o <= 0x03FF  # Greek（α β γ δ θ λ μ π σ φ ψ ω…公式常用）
+        or c in "±×÷"  # 落在 Latin-1 补充段的常见数学符号
+    )
+
+
+def _looks_formula_heavy(text: str) -> bool:
+    """整页数学符号计数达 FORMULA_MIN_SYMBOLS → 判为公式/复杂版式页（docs/15 §3.1）。"""
+    return sum(1 for c in text if _is_math_char(c)) >= FORMULA_MIN_SYMBOLS
+
+
 def _extract_pdf_text(
     data: bytes,
     file_name: str = "",
     transcribe: Optional[Callable[[bytes, str], Optional[str]]] = None,
 ) -> tuple[Optional[str], bool]:
-    """PDF 逐页提取 + 扫描页 OCR（C 批 docs/13 §3.1）。返回 (文本, 是否发生过 OCR)。
+    """PDF 逐页提取 + 扫描页 OCR（C 批 docs/13）+ 文本页结构化提取（D1 docs/15）。
+    返回 (文本, 页文本是否经过非确定性变换)。
 
-    逐页判定：页文本 strip 后 >= SCAN_TEXT_THRESHOLD 用原文本——纯文本 PDF 输出与
-    旧实现逐字节一致（不打任何标记，回归红线：文本变化会让既有已入库文档漂出新
-    point）；低于阈值且有转写器 → 栅格化 → vision OCR → 转写 strip 后 >=
-    MIN_OCR_TEXT_CHARS 才采用，替换为 `〔第N页·OCR〕\\n转写文本`（页归属嵌在文本里：
-    对 split_text 透明、检索命中可见）；碎渣结果视为未采用（评审#6：防短文本页误触发
-    ocr_used 切换幂等寻址）。栅格化/转写任何一步失败降级保留该页原文本。
-    OCR **尝试**页数达 MAX_OCR_PAGES 后不再 OCR（送 transcribe 即计、无论成败——
-    vision 调用次数硬上限，评审#5/#18），文末追加超限注记（显式登记而非静默截断）。
-    ocr_used 供 build_ingestor 决定 dedup_seed：转写文本天然漂移，必须切到文件字节
-    寻址幂等（docs/13 §3.3）。
+    逐页判定：
+    - **文本页**（strip 后 >= SCAN_TEXT_THRESHOLD）走 D1（docs/15 §3.1）结构化提取层：
+      ① 表格（pdfplumber extract_tables，**仅 lines 策略：需真实绘制线**，评审 #9 去 text
+      兜底）非空 → plain 正文 + 各表 markdown（〔第N页·表格〕标记）；② 两栏对半 → 裁左右列
+      先左后右重排；③ 命中数学符号
+      密度启发式 → 整页 vision 兜底（复用扫描 OCR 链路与配额）；④ 纯 prose 单栏无表格 →
+      **plain 逐字节原样**（回归红线 test_pure_text_pdf_output_identical，docs/15 §3.2）。
+      pdfplumber 未装/任一步异常一律降级回退 plain，绝不炸 run。
+    - **扫描页**（< 阈值）且有转写器 → 栅格化 → vision OCR → 转写 strip 后 >=
+      MIN_OCR_TEXT_CHARS 才采用，替换为 `〔第N页·OCR〕\\n转写文本`；碎渣结果视为未采用
+      （评审#6：防短文本页误触发切换幂等寻址）。无转写器时整体行为与现状一致。
+    OCR **尝试**页数达 MAX_OCR_PAGES 后不再 OCR（扫描页 + 公式兜底页共享该硬上限；送
+    transcribe 即计、无论成败——vision 调用次数硬上限，评审#5/#18），文末追加超限注记。
+    返回的第二个 bool（D1 docs/15 §3.2 泛化）：只要有页被**非确定性变换**过（扫描/公式
+    OCR 或表格/多栏结构化重排）即 True——供 build_ingestor 决定 dedup_seed：变换后文本
+    与旧 plain 逐字节不同（OCR 更天然漂移），必须切到文件字节寻址幂等（docs/13 §3.3）。
     """
+    plumber: Any = None
+    plumber_opened = False
     try:
         from pypdf import PdfReader  # 惰性：未装/损坏 pdf 都降级
 
         reader = PdfReader(io.BytesIO(data))
         pages: list[str] = []
         ocr_attempted = 0  # 已尝试 OCR 的页数：调用 transcribe 即计、无论成败（配额计数）
-        ocr_done = 0  # OCR 成功采用页数（仅供 ocr_used 信号）
         scan_total = 0  # 检出的扫描页总数（仅在有转写器时统计，用于超限注记）
         limit_skipped = 0  # 因尝试上限未 OCR 的扫描页数（>0 才追加注记）
+        transformed = False  # D1（docs/15 §3.2）：是否有页经非确定性变换（OCR / 结构化重排）
         for idx, page in enumerate(reader.pages):
             text = page.extract_text() or ""
-            if len(text.strip()) >= SCAN_TEXT_THRESHOLD or transcribe is None:
-                pages.append(text)  # 文本页原样保留；无转写器时整体行为与现状一致
+            # —— 文本页：D1 结构化提取层（表格 / 多栏 / 公式），无结构则 plain 逐字节原样 ——
+            if len(text.strip()) >= SCAN_TEXT_THRESHOLD:
+                if not plumber_opened:  # 惰性打开：扫描件/无文本页不付 pdfplumber 解析成本
+                    plumber_opened = True
+                    plumber = _open_plumber(data)
+                ppage = _plumber_page(plumber, idx)
+                # ① 表格：非空 → plain 正文 + 各表 markdown（〔第N页·表格〕标记同 OCR 款）
+                mds = _extract_tables_md(ppage) if ppage is not None else None
+                if mds:
+                    parts = [text] + [f"〔第{idx + 1}页·表格〕\n{md}" for md in mds]
+                    pages.append("\n".join(parts))
+                    transformed = True
+                    continue
+                # ② 两栏对半 → 裁左右子页先左后右重排阅读顺序
+                two_col = _two_column_text(ppage) if ppage is not None else None
+                if two_col is not None:
+                    pages.append(two_col)
+                    transformed = True
+                    continue
+                # ③ 公式：命中数学符号密度启发式 → 整页 vision 兜底（复用扫描 OCR 配额上限）
+                if (transcribe is not None and _looks_formula_heavy(text)
+                        and ocr_attempted < MAX_OCR_PAGES):
+                    fx: Optional[str] = None
+                    try:
+                        img = _rasterize_pdf_page(data, idx)
+                        if img is not None:
+                            img_mime = "image/png" if img.startswith(b"\x89PNG") else "image/jpeg"
+                            ocr_attempted += 1  # 尝试即计（与扫描页同款硬上限语义）
+                            fx = transcribe(img, img_mime)
+                    except Exception as exc:  # noqa: BLE001 — 兜底失败降级保留 plain，不炸整份
+                        logger.warning("pdf formula-page OCR failed for %s (page %s): %s",
+                                       file_name, idx + 1, exc)
+                    if fx and len(fx.strip()) >= MIN_OCR_TEXT_CHARS:
+                        pages.append(f"〔第{idx + 1}页·OCR〕\n{fx}")
+                        transformed = True
+                        continue
+                # ④ 纯 prose 单栏无表格：plain 逐字节原样（回归红线，docs/15 §3.2）
+                pages.append(text)
+                continue
+            # —— 扫描页（< 阈值）——
+            if transcribe is None:
+                pages.append(text)  # 无转写器：整体行为与现状一致
                 continue
             scan_total += 1
             if ocr_attempted >= MAX_OCR_PAGES:
@@ -349,10 +550,10 @@ def _extract_pdf_text(
             except Exception as exc:  # noqa: BLE001 — 单页 OCR 失败降级保留原文本，不拖垮整份
                 logger.warning("pdf page OCR failed for %s (page %s): %s", file_name, idx + 1, exc)
             # 采用闸（评审#6）：碎渣转写（strip 后 < MIN_OCR_TEXT_CHARS，如扉页/隔页
-            # OCR 出空或回显几个字符）不采用——保留原页文本、不计入 ocr_used，文本
+            # OCR 出空或回显几个字符）不采用——保留原页文本、不计入 transformed，文本
             # PDF 的内容寻址幂等不被切到 seed；尝试配额已在上面扣除。
             if ocr and len(ocr.strip()) >= MIN_OCR_TEXT_CHARS:
-                ocr_done += 1
+                transformed = True
                 pages.append(f"〔第{idx + 1}页·OCR〕\n{ocr}")
             else:
                 pages.append(text)
@@ -361,10 +562,16 @@ def _extract_pdf_text(
             # 注记语义（评审#5）：X=检出的扫描页总数，N=已尝试 OCR 的页数（含失败页）。
             note = f"〔注：扫描页共{scan_total}页，仅前{ocr_attempted}页已尝试OCR〕"
             merged = f"{merged}\n{note}" if merged else note
-        return (merged or None), ocr_done > 0
+        return (merged or None), transformed
     except Exception as exc:  # noqa: BLE001 — pdf 解析失败降级跳过（坏 PDF 必须仍返回 None）
         logger.warning("pdf text extract failed for %s: %s", file_name, exc)
         return None, False
+    finally:
+        if plumber is not None:  # D1：释放 pdfplumber 打开的底层文件句柄
+            try:
+                plumber.close()
+            except Exception:  # noqa: BLE001 — 关闭失败无害
+                pass
 
 
 def extract_text(
@@ -446,11 +653,12 @@ def extract_text_ex(
     *,
     transcribe: Optional[Callable[[bytes, str], Optional[str]]] = None,
 ) -> tuple[Optional[str], bool]:
-    """extract_text 的扩展版（C 批 docs/13 §3.3）：额外返回"是否发生过 OCR"。
+    """extract_text 的扩展版（C 批 docs/13 §3.3）：额外返回"页文本是否被非确定性变换过"。
 
-    ocr_used 仅对 PDF 扫描页 OCR 置 True——build_ingestor 据此把幂等键从内容寻址切到
-    dedup_seed=md5(文件字节)（转写漂移防重复入库）。图片分支恒 False：图片的种子由
-    build_ingestor 既有的 ocr_image 门负责，不动既有逻辑。
+    该 bool（D1 docs/15 §3.2 泛化）对 PDF 扫描/公式 OCR **或**表格/多栏结构化重排置
+    True——build_ingestor 据此把幂等键从内容寻址切到 dedup_seed=md5(文件字节)（变换后
+    文本与旧 plain 逐字节不同、OCR 更天然漂移，防重复入库）。图片分支恒 False：图片的
+    种子由 build_ingestor 既有的 ocr_image 门负责，不动既有逻辑。
     头部两个分支的判定顺序必须与 extract_text 保持一致（image 先于 pdf）。
     """
     if is_image(mime) and transcribe is not None:
@@ -541,7 +749,8 @@ def build_ingestor(
             except Exception as exc:  # noqa: BLE001 — 单文件失败不拖垮其余
                 logger.warning("attachment download failed for ingest %s: %s", a.get("resource_key"), exc)
                 continue
-            # C 批（docs/13）：改调 _ex 版拿 ocr_used 信号（扫描 PDF 是否发生过逐页 OCR）。
+            # C 批（docs/13）：改调 _ex 版拿"非确定性变换"信号（D1 docs/15 §3.2 泛化：
+            # 扫描/公式 OCR 或表格/多栏结构化重排均置 True）。
             text, ocr_used = extract_text_ex(data, mime, fname, transcribe=_transcribe)
             if not text or not text.strip():
                 continue
@@ -549,10 +758,11 @@ def build_ingestor(
                 text = text[:MAX_INGEST_CHARS] + "\n…（超长截断）"
             doc = {"text": text, "file_name": fname, "source_id": a["resource_key"]}
             if ocr_image or ocr_used:
-                # OCR 文本每次转写会变（图片整图 OCR=ocr_image 既有门；扫描 PDF 逐页
-                # OCR=ocr_used，C 批 docs/13 §3.3）——用文件字节内容哈希做稳定幂等种子，
-                # 保证同文件重传/重跑原地 upsert，不因文本漂移而重复入库（评审#8）。
-                # 纯文本 PDF ocr_used=False 绝不带 seed：保持内容寻址幂等不变（回归红线）。
+                # 变换后文本与旧 plain 逐字节不同（图片整图 OCR=ocr_image 既有门；PDF 扫描/
+                # 公式 OCR、表格/多栏重排=ocr_used，C 批 docs/13 §3.3 + D1 docs/15 §3.2）——
+                # 用文件字节内容哈希做稳定幂等种子，保证同文件重传/重跑原地 upsert，不因文本
+                # 漂移/重排而重复入库（评审#8）。纯 prose 单栏无表格 PDF ocr_used=False 绝不
+                # 带 seed：保持内容寻址幂等不变（回归红线）。
                 import hashlib as _hl
 
                 doc["dedup_seed"] = _hl.md5(data).hexdigest()
