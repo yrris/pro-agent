@@ -21,6 +21,11 @@ services:
       MINIO_ENDPOINT: minio:9000
       QDRANT_URL: http://qdrant:6333 # UX-1 知识库管理（Files 面板读/删直连）
       WEB_DIR: /app/web
+      # OTel 追踪（docs/18，默认关）：OTEL_ENABLED=1 起 profile observability 一并冒烟；
+      # 端点指向同网 tempo（Go 依赖已编入镜像，开箱即导出 agent.run 根 span）。
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
+      OTEL_SERVICE_NAME: my-agent-control-plane
     ports:
       - "${CONTROL_PLANE_PORT:-8080}:8080"
     healthcheck:
@@ -54,6 +59,13 @@ services:
       COGNITION_SKILLS_DIRS: '["/src/cognition/examples/skills", "/src/cognition/runtime/skills"]'
       COGNITION_SKILL_RUNNER: local # 容器内不做 DinD；真沙箱运行器属后续拓展
       COGNITION_FAKE_MODEL: ${COGNITION_FAKE_MODEL:-0} # shell 变量优先于 .env（冒烟：COGNITION_FAKE_MODEL=1 make stack-up）
+      # OTel 追踪（docs/18，默认关）：拦截器建 server span，接 Go 的 traceparent 续同一 trace。
+      # 注意：认知面基础镜像不含 opentelemetry（otel 属 pyproject optional 组）；启用后
+      # otel_seam import-guard 降级为 no-op（server span 不产），需在镜像内 `uv sync --extra otel`
+      # 才真正导出 Python server span（见 observability/README.md「认知面追踪」）。
+      COGNITION_OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      COGNITION_OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
+      COGNITION_OTEL_SERVICE_NAME: my-agent-cognition
     expose:
       - "50051"
     healthcheck:
@@ -146,6 +158,28 @@ services:
       - "${NATS_PORT:-4222}:4222"
     volumes:
       - ./volumes/nats:/data
+
+  tempo:
+    # 分布式追踪后端（docs/18 §3.2）：原生 OTLP receiver，两面服务直连导出，无 collector 中转。
+    # 挂 profile "observability"：默认 `up` / `--profile app` 都不起它（trace 是可选开关）。
+    #   起法：docker compose --profile app --profile observability up -d
+    #   开导出：OTEL_ENABLED=1 docker compose --profile app --profile observability up -d
+    profiles: ["observability"]
+    image: grafana/tempo:2.6.1
+    container_name: my-agent-tempo
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - ./volumes/tempo:/var/tempo
+    ports:
+      - "${TEMPO_HTTP_PORT:-3200}:3200" # 查询 API（global-grafana 经 host.docker.internal:3200 加 Tempo datasource）
+      - "${TEMPO_OTLP_GRPC_PORT:-4317}:4317" # OTLP/gRPC（host 进程 make control/cognition 亦可导出到此）
+      - "${TEMPO_OTLP_HTTP_PORT:-4318}:4318" # OTLP/HTTP（备用）
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3200/ready | grep -q ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
 networks:
   default:
