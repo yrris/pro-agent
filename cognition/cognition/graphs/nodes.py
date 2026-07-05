@@ -41,6 +41,8 @@ IMAGE_GEN_INSTRUCTION = (
     "【生图模式已开启】用户希望本轮生成图片。请务必调用 image_generate 工具产出图片："
     "prompt 写清主体/风格/构图/光影（可先查 image-style-library 技能的风格模板）。"
     "若用户上传了图片附件，把其文件名填入 image_generate 的 source_images 参数做图生图/编辑。"
+    "若用户还附了蒙版文件（要求局部重绘/inpaint 时），把蒙版文件名填入 image_generate 的 "
+    "mask 参数（蒙版透明区域=要重绘的区域），底图文件名仍填入 source_images。"
     "若同时指定了输出格式（如网页/文档/PPT），先生成图片，再用对应技能"
     "（frontend-design 做网页、ppt-generation 做文档/PPT）把生成的图片与文字一起编排进最终产物。"
 )

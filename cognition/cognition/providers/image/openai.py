@@ -76,6 +76,8 @@ def parse_openai_images(data: dict[str, Any]) -> list[bytes]:
 class OpenAIImageProvider:
     # 是否真正把源图送去生成（供 image_generate 措辞判断，不谎称图生图）。
     supports_image_to_image = True
+    # 是否支持 mask 局部重绘（/images/edits 的 mask 字段；gpt-image 系为提示词引导式）。
+    supports_inpaint = True
     def __init__(
         self, *, api_key: str, model: str, base_url: str, quality: str = "low", timeout: float = 180.0
     ) -> None:
@@ -92,6 +94,7 @@ class OpenAIImageProvider:
         images: Optional[list[bytes]] = None,  # 传了→图生图走 /images/edits(multipart)
         size: str = "1024x1024",
         n: int = 1,
+        mask: Optional[bytes] = None,  # inpaint 蒙版（RGBA PNG，alpha=0=重绘区，仅作用于第一张）
     ) -> list[bytes]:
         headers = {"Authorization": f"Bearer {self._api_key}"}
         async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -102,6 +105,10 @@ class OpenAIImageProvider:
                 for i, buf in enumerate(images):
                     ext, ctype = sniff_image_type(buf)
                     files.append(("image[]", (f"src-{i}.{ext}", buf, ctype)))
+                if mask is not None:
+                    # mask 是**单字段名 mask**（非 mask[]），走 files 不进表单纯字段；
+                    # 表单红线不变：绝不加 response_format/input_fidelity（gpt-image-2 400）。
+                    files.append(("mask", ("mask.png", mask, "image/png")))
                 resp = await client.post(
                     f"{self._base}/images/edits",
                     headers=headers,

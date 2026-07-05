@@ -36,6 +36,8 @@ def parse_wanx_task_status(data: dict[str, Any]) -> tuple[str, list[str]]:
 class WanxImageProvider:
     # 是否真正把源图送去生成（供 image_generate 措辞判断，不谎称图生图）。
     supports_image_to_image = False
+    # v1 文生图无 mask 概念：不支持局部重绘，收到 mask 忽略（工具层如实措辞）。
+    supports_inpaint = False
     def __init__(self, *, api_key: str, model: str, base_url: str, timeout: float = 120.0) -> None:
         self._api_key = api_key
         self._model = model
@@ -49,6 +51,7 @@ class WanxImageProvider:
         images: Optional[list[bytes]] = None,  # v1 文生图不支持源图，忽略
         size: str = "1024x1024",
         n: int = 1,
+        mask: Optional[bytes] = None,  # 不支持 inpaint，忽略（supports_inpaint=False）
     ) -> list[bytes]:
         headers = {"Authorization": f"Bearer {self._api_key}"}
         async with httpx.AsyncClient(timeout=30.0) as client:

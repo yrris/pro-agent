@@ -1,6 +1,7 @@
 """图像生成 provider（M9 线 B 生成侧）。
 
-协议：`generate(prompt, images=None, size, n) -> list[bytes]`（PNG/JPEG 原始字节）。
+协议：`generate(prompt, images=None, size, n, mask=None) -> list[bytes]`（PNG/JPEG 原始字节；
+mask 为 inpaint 蒙版，能力经 supports_inpaint 类属性诚实声明，不支持的实现忽略参数）。
 实现：fake（确定性，测试/离线）| openai（gpt-image 系列，quality 默认 low 成本优先）
 | ark（火山方舟豆包，同步 b64）| wanx（通义万相，异步任务轮询）。
 生图 key 缺省时不注册 image_generate 工具（registry 门控）。

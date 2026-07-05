@@ -39,6 +39,8 @@ def parse_ark_response(data: dict[str, Any]) -> bytes:
 class ArkImageProvider:
     # 是否真正把源图送去生成（供 image_generate 措辞判断，不谎称图生图）。
     supports_image_to_image = True
+    # seededit 无 mask 概念：不支持局部重绘，收到 mask 忽略（工具层如实措辞）。
+    supports_inpaint = False
     def __init__(self, *, api_key: str, model: str, base_url: str, timeout: float = 120.0) -> None:
         self._api_key = api_key
         self._model = model
@@ -52,6 +54,7 @@ class ArkImageProvider:
         images: Optional[list[bytes]] = None,
         size: str = "1024x1024",
         n: int = 1,
+        mask: Optional[bytes] = None,  # 不支持 inpaint，忽略（supports_inpaint=False）
     ) -> list[bytes]:
         image_b64 = base64.b64encode(images[0]).decode() if images else None
         out: list[bytes] = []

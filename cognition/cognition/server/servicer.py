@@ -30,6 +30,14 @@ AGENT_TYPE_PLAN_SOLVE = "plan_solve"
 AGENT_TYPE_DEEP_RESEARCH = "deep_research"
 
 
+class ForkSeedError(RuntimeError):
+    """分叉播种失败（定位不到分叉点 / 分叉点无可继承记忆）。
+
+    docs/14 §2 红线：此类失败必须让 run 显式以错误收尾——静默降级成"空记忆会话"
+    是最坏结果（用户在一个自称继承了历史、实则失忆的会话里继续对话，M7 教训）。
+    """
+
+
 def resolve_kb_id(request) -> str:
     """解析本 run 的知识库归属（纯函数，单点解析后经 config metadata 供
     knowledge_search 与附件入库共用）。
@@ -162,7 +170,8 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
             return agent_pb2.IngestDocumentResponse(
                 ok=False,
                 kb_id=kb_id,
-                message="未入库：仅支持文本/Markdown/CSV/JSON/PDF；若确为受支持类型，可能是下载/解析失败，请重试",
+                message="未入库：仅支持文本/Markdown/CSV/JSON/PDF/扫描版 PDF（需 vision key）；"
+                        "若确为受支持类型，可能是下载/解析失败，请重试",
             )
         logger.info("document ingested into %s: %s", kb_id, list(names))
         return agent_pb2.IngestDocumentResponse(ok=True, kb_id=kb_id)
@@ -186,12 +195,39 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
                 yield out
             return
 
+        # —— docs/14 会话分叉：分叉会话的第一条 run 先把父 thread 分叉点的记忆播种进
+        # 新 thread，再照常起图（拦截位置对齐 _resume_approval 先例：metadata 特殊键在
+        # 构建 state 之前处理；fork 键由 Go 只在"有 fork 登记且尚无 own run"时附带）。
+        if req_meta.get("fork_from_session_id"):
+            try:
+                await self._seed_forked_thread(
+                    src_session=req_meta["fork_from_session_id"],
+                    src_run=req_meta.get("fork_from_run_id", ""),
+                    new_session=session_id,
+                    log=log,
+                )
+            except ForkSeedError as exc:
+                # 诚实报错：定位不到分叉点绝不静默降级成空记忆会话（docs/14 §2 红线）。
+                log.warning("fork seed failed: %s", exc)
+                yield mapper.error_result(str(exc)).to_proto()
+                return
+            except Exception as exc:  # noqa: BLE001 — 播种崩溃同样诚实收尾，不冒充继承成功
+                log.exception("fork seed crashed")
+                yield mapper.error_result(f"分叉播种失败: {exc}").to_proto()
+                return
+
         # —— 附件入库预步（run 前同步：read-your-writes，刚上传就能问到）——
         # 必须 to_thread：embedder/下载是同步阻塞，裸调会冻结 grpc.aio 单事件循环上的
         # 全部并发 run。整体 best-effort：入库失败不阻断 run（附件仍以注记/引用块在场）。
         ingested: tuple[str, ...] = ()
         attachments = list(getattr(request, "attachments", []) or [])
-        if attachments and self.ingest_attachments_fn is not None:
+        if attachments and req_meta.get("image_gen"):
+            # 生图 run（评审#23）：附件是生成素材（底图/蒙版）而非用户知识——跳过自动
+            # 入库：省去逐附件的 vision OCR 调用，也不向知识库堆蒙版类垃圾文档（蒙版
+            # 字节每次都不同，无幂等收敛；生图会话本就一次性隔离，docs/12 §4.6）。
+            # 附件白名单/image_generate 的下载路径不受影响。
+            log.info("image_gen run: skip attachment auto-ingest (%d attachment(s))", len(attachments))
+        elif attachments and self.ingest_attachments_fn is not None:
             from cognition.attachments import normalize_attachments
 
             try:
@@ -260,6 +296,90 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
         except Exception as exc:  # noqa: BLE001 — 节点异常兜底，保证流干净关闭
             log.exception("run failed")
             yield mapper.error_result(str(exc)).to_proto()
+
+    async def _seed_forked_thread(self, src_session: str, src_run: str, new_session: str, log) -> None:
+        """把父会话 thread 在"分叉点那一轮结束时"的 messages 通道播种进新 thread。
+
+        checkpoint 深度机制（docs/14 §4，本方法是"时间旅行"的全部认知面实现）：
+
+        1. **轮边界定位靠 checkpoint metadata 的 run_id**：Run() 一直把 run_id 写进
+           config["metadata"]，LangGraph 的 get_checkpoint_metadata 会把它合并进该次
+           执行产生的**每个** checkpoint 的 metadata 落库（PG 为 JSONB 列）。于是
+           "run K 结束时的状态" == 父 thread 中 metadata.run_id==K 的最新 checkpoint，
+           aget_state_history(filter={"run_id": K}, limit=1) 一击命中（history 新→旧）。
+           这正是零 proto 字段、零 runs 表加列就能锚定轮边界的关键：框架落 metadata
+           是既有行为，"发现它可当分叉锚"是设计。
+
+        2. **分叉点快照天然不可变**：checkpoint 链只追加不改写，父会话在分叉之后继续
+           演化（新轮次、新分支）不影响这里定位到的历史快照——两条时间线从此独立。
+
+        3. **只搬 messages 通道**（会话记忆的本体，think 节点的修复→裁剪→附件展开三道
+           投影全部吃它）：plan 家族的 reduced_state/sub_results 设计上按 run 隔离，
+           播过去等于把修过的"跨 run 残留"bug 请回来（docs/14 §4.3）。
+
+        4. **必须用 react 图做定位与播种**：三图共享同一 checkpointer 实例、同 thread_id，
+           但 snapshot.values / aupdate_state 都按**图自己的 state schema** 过滤通道——
+           实测（langgraph 1.2.7）plan 图没有 messages 通道，用它 aupdate_state(
+           {"messages": ...}) 会**静默丢弃**（不报错、什么也没写），aget_state_history
+           的 values 里同样看不到 messages。react 图写下的 messages 会随 checkpoint
+           保留在 thread 的通道并集里（另一实测：plan run 跑过同 thread 后 messages
+           原样保留），因此无论分叉会话首 run 是什么模式，这里统一走 react 图。
+
+        5. **pending interrupt 天然不迁移**：aupdate_state 只写通道值，不搬 pending
+           tasks/writes——父会话停在审批卡时，其挂起决议留在父时间线；新时间线的模型
+           只"记得曾请求审批"，续聊重新走工具（docs/14 §4.4，刻意语义而非缺陷）。
+        """
+        graph = self.react_graph
+
+        # —— 幂等闸（第二道保险；第一道在 Go：仅"有 fork 登记且无 own run"才附 fork 键）——
+        # 目标 thread 已有任何 checkpoint（并发首消息/客户端重试已播种过）→ 直接跳过，
+        # 绝不重复追加消息。空 thread 的判据：values 为空 且 config 无 checkpoint_id。
+        new_cfg = {"configurable": {"thread_id": new_session}}
+        snapshot = await graph.aget_state(new_cfg)
+        existing_ckpt = ((getattr(snapshot, "config", None) or {}).get("configurable") or {}).get(
+            "checkpoint_id"
+        )
+        if (getattr(snapshot, "values", None) or {}) or existing_ckpt:
+            log.info("fork seed skipped: thread %s already has checkpoint", new_session)
+            return
+
+        # —— 定位：父 thread 中 metadata.run_id == src_run 的最新 checkpoint（该轮末快照）——
+        located = None
+        async for s in graph.aget_state_history(
+            {"configurable": {"thread_id": src_session}}, filter={"run_id": src_run}, limit=1
+        ):
+            located = s
+            break
+        if located is None:
+            # metadata 机制启用前的远古 thread / checkpoint 被清理 / FAKE 模式重启后
+            # InMemorySaver 记忆丢失——均无法定位，诚实报错。
+            raise ForkSeedError(
+                f"无法定位分叉点（会话过旧或无 checkpoint 记录：run {src_run or '?'}）。"
+                "该分叉会话无法继承记忆，请从较新的轮次重新分叉或直接新建会话。"
+            )
+        messages = (getattr(located, "values", None) or {}).get("messages") or []
+        if not messages:
+            # plan-only 老会话等：该轮 checkpoint 没有 messages 通道——没有可继承的
+            # 对话记忆，同样诚实报错（播出一个空 thread 就是在制造"假继承"）。
+            raise ForkSeedError(
+                "分叉点没有可继承的对话记忆（该轮可能由纯规划模式产生），无法分叉播种。"
+            )
+
+        # —— 播种：经 add_messages reducer 把整段消息写成新 thread 的首个 checkpoint ——
+        # 实测（langgraph 1.2.7）：**空 thread 上 aupdate_state 不带 as_node 不抛
+        # ambiguous update**——无既有 checkpoint 时更新按 START 语义写入（落库 checkpoint
+        # 的 metadata.source=="update"），多节点 react 图也无歧义；若未来版本收紧，
+        # 回退方案是显式 as_node="__start__"。附件引用块（占位+key 形态）随消息一起
+        # 被搬，但下载白名单仍按"本 run attachments"校验——继承块只是模型上下文，
+        # 不赋予新下载权限（安全边界不变，docs/14 §4.3）。
+        await graph.aupdate_state(new_cfg, {"messages": messages})
+        log.info(
+            "forked thread seeded: %s <- %s@%s (%d messages)",
+            new_session,
+            src_session,
+            src_run,
+            len(messages),
+        )
 
     async def _emit_pending_approval(self, graph, config, mapper, log):
         """流尽未终态时探测 pending interrupt：发 approval_request + 挂起 RESULT 收尾。"""

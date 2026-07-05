@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import threading
 from collections import OrderedDict
 from typing import Any, Callable, Iterable, Optional, Sequence
 
@@ -161,6 +162,25 @@ PDF_MIME = "application/pdf"
 # 单文件入库文本上限（约 200k 字符）：防超大文档拖慢 run 启动；超限截断并注记。
 MAX_INGEST_CHARS = 200_000
 
+# —— C 批（docs/13）：扫描版 PDF 逐页 OCR ——
+# 扫描页判定阈值：页文本 strip 后不足该字符数即判为扫描页。不用纯判空——扫描件常被
+# pypdf 提出页眉/页码几个字符的碎渣；30 字符以下的"文本页"即便误判去 OCR，转写结果
+# 也不会更差。模块级常量便于 monkeypatch/调优（docs/13 §3.1）。
+SCAN_TEXT_THRESHOLD = 30
+
+# 每份 PDF 的 OCR **尝试**页数上限（vision 调用次数硬上限）：每扫描页一次 vision 调用
+# 且发生在 run 前同步预步，超大扫描件靠此护栏保住首轮响应。按"尝试"而非"成功"计数
+#（评审#5/#18）：转写失败/返回空的页同样消耗配额——否则 key 限流/空白图册场景下每页
+# 都白付一次栅格化+vision 往返，护栏恰在最需要止损时失效。超限在文末如实注记而非静默
+# 截断（docs/13 §2/§3.5）。
+MAX_OCR_PAGES = 20
+
+# OCR 采用阈值：转写结果 strip 后不足该字符数视为"未采用"——保留原页文本、不置
+# ocr_used（但已消耗尝试配额）。防止文本 PDF 的短页（扉页/章节隔页，<30 字符被判为
+# 扫描页）OCR 出空/碎渣后误触发 ocr_used=True，把整份文档的幂等寻址从内容哈希切到
+# dedup_seed——既有已入库文本 PDF 重传会全量漂出新 point（评审#6，docs/13 §3.3 红线）。
+MIN_OCR_TEXT_CHARS = 10
+
 
 def is_text_like(mime: str, file_name: str = "") -> bool:
     m = (mime or "").lower()
@@ -201,6 +221,152 @@ def is_pdf(mime: str, file_name: str = "") -> bool:
     return (mime or "").lower() == PDF_MIME or (file_name or "").lower().endswith(".pdf")
 
 
+# pypdfium2/PDFium 官方声明 "inherently not thread-safe"（PDFium 内部全局状态；
+# ctypes 外调释放 GIL 即真并发）：Run 前置入库与 IngestDocument 均经 asyncio.to_thread
+# 跑在默认线程池的不同 worker 上，两个线程同时进入 pdfium C 调用是未定义行为——典型
+# 后果是内存损坏/段错误，这类原生崩溃不是 Python 异常，except 兜不住，整个认知面进程
+# 连同所有在飞 run 一起死掉（评审#4）。模块级互斥锁把全部 pdfium 调用串行化（官方推荐
+# 的多线程用法）；栅格化毫秒级、慢路径 vision OCR 在锁外，串行化对吞吐影响可忽略。
+_PDFIUM_LOCK = threading.Lock()
+
+# 渲染前像素预算（约 A4@300DPI 再上浮）：PDF MediaBox 允许 14400×14400pt，scale=2 下
+# 单页位图可达 GB 级，且缓冲在 pdfium C 层渲染时直接分配——MAX_IMAGE_BYTES 字节闸只
+# 作用于编码后的 PNG/JPEG，拦不住渲染缓冲本身（评审#7/#17）。必须在 render 之前按页
+# 点尺寸反解安全 scale，对齐 _office_zip_safe 的"解析前防护"先例。
+MAX_RENDER_PIXELS = 12_000_000
+
+
+def _rasterize_pdf_page(data: bytes, page_index: int, *, scale: float = 2.0) -> Optional[bytes]:
+    """把 PDF 单页栅格化为位图字节（C 批 docs/13 §3.2）。
+
+    惰性 import pypdfium2（自带 pdfium 二进制 wheel，python-slim 镜像零系统依赖；
+    对齐本仓库解析依赖"函数内 import + 异常降级"的既定风格）。
+    渲染前预算闸（评审#7/#17）：先用 page.get_size()（点）反解安全
+    scale = min(scale, sqrt(MAX_RENDER_PIXELS/(w*h)))，让位图分配上限有界；夹到
+    0.5 以下仍超预算（异常巨幅 MediaBox）→ 跳过该页返回 None（调用方保留原文本），
+    绝不让 GB 级缓冲先于任何检查被提交。
+    尺寸闸：PNG 超 MAX_IMAGE_BYTES（转写器拒转线）→ 降 scale 重渲一次 → 仍超转
+    JPEG q85（有损但转写足够）→ 还超只能放弃——否则高 DPI 页会被转写器静默拒转。
+    调用方按魔数嗅探 PNG/JPEG 决定 mime。任何失败降级返回 None，不炸调用方。
+    线程安全（评审#4）：pdfium 全局状态非线程安全，从 PdfDocument 打开到 close 的
+    全部调用持模块级 _PDFIUM_LOCK 串行化（见常量注释）。
+    """
+    try:
+        import math
+
+        import pypdfium2 as pdfium  # 惰性：未装/坏字节都降级
+
+        def _encode(im: Any, fmt: str, **kw: Any) -> bytes:
+            out = io.BytesIO()
+            im.save(out, format=fmt, **kw)
+            return out.getvalue()
+
+        with _PDFIUM_LOCK:
+            pdf = pdfium.PdfDocument(data)
+            try:
+                page = pdf[page_index]
+                try:
+                    # 渲染前像素预算：按页点尺寸夹紧 scale（分配发生在 render 内的 C 层，
+                    # 这里是唯一能在分配之前挡住它的位置）。
+                    w_pt, h_pt = page.get_size()
+                    area = max(float(w_pt) * float(h_pt), 1.0)
+                    scale = min(scale, math.sqrt(MAX_RENDER_PIXELS / area))
+                    if scale < 0.5:  # 0.5 兜底 ≈ 36DPI，再低无转写价值——巨幅页直接跳过
+                        logger.warning(
+                            "pdf page %s too large to rasterize (%.0fx%.0f pt), skipped",
+                            page_index + 1, w_pt, h_pt,
+                        )
+                        return None
+                    img = page.render(scale=scale).to_pil()
+                    png = _encode(img, "PNG")
+                    if len(png) <= MAX_IMAGE_BYTES:
+                        return png
+                    # 高 DPI 页超闸：降半 scale 重渲（0.5 兜底；scale 已过预算闸 ≥0.5，
+                    # 降半后仍 ≤ 预算上限，不会重新超预算）。
+                    img = page.render(scale=max(scale / 2, 0.5)).to_pil()
+                    png = _encode(img, "PNG")
+                    if len(png) <= MAX_IMAGE_BYTES:
+                        return png
+                    jpg = _encode(img.convert("RGB"), "JPEG", quality=85)
+                    return jpg if len(jpg) <= MAX_IMAGE_BYTES else None
+                finally:
+                    page.close()
+            finally:
+                pdf.close()
+    except Exception as exc:  # noqa: BLE001 — 栅格化失败降级，调用方保留该页原文本
+        logger.warning("pdf page rasterize failed (page %s): %s", page_index + 1, exc)
+        return None
+
+
+def _extract_pdf_text(
+    data: bytes,
+    file_name: str = "",
+    transcribe: Optional[Callable[[bytes, str], Optional[str]]] = None,
+) -> tuple[Optional[str], bool]:
+    """PDF 逐页提取 + 扫描页 OCR（C 批 docs/13 §3.1）。返回 (文本, 是否发生过 OCR)。
+
+    逐页判定：页文本 strip 后 >= SCAN_TEXT_THRESHOLD 用原文本——纯文本 PDF 输出与
+    旧实现逐字节一致（不打任何标记，回归红线：文本变化会让既有已入库文档漂出新
+    point）；低于阈值且有转写器 → 栅格化 → vision OCR → 转写 strip 后 >=
+    MIN_OCR_TEXT_CHARS 才采用，替换为 `〔第N页·OCR〕\\n转写文本`（页归属嵌在文本里：
+    对 split_text 透明、检索命中可见）；碎渣结果视为未采用（评审#6：防短文本页误触发
+    ocr_used 切换幂等寻址）。栅格化/转写任何一步失败降级保留该页原文本。
+    OCR **尝试**页数达 MAX_OCR_PAGES 后不再 OCR（送 transcribe 即计、无论成败——
+    vision 调用次数硬上限，评审#5/#18），文末追加超限注记（显式登记而非静默截断）。
+    ocr_used 供 build_ingestor 决定 dedup_seed：转写文本天然漂移，必须切到文件字节
+    寻址幂等（docs/13 §3.3）。
+    """
+    try:
+        from pypdf import PdfReader  # 惰性：未装/损坏 pdf 都降级
+
+        reader = PdfReader(io.BytesIO(data))
+        pages: list[str] = []
+        ocr_attempted = 0  # 已尝试 OCR 的页数：调用 transcribe 即计、无论成败（配额计数）
+        ocr_done = 0  # OCR 成功采用页数（仅供 ocr_used 信号）
+        scan_total = 0  # 检出的扫描页总数（仅在有转写器时统计，用于超限注记）
+        limit_skipped = 0  # 因尝试上限未 OCR 的扫描页数（>0 才追加注记）
+        for idx, page in enumerate(reader.pages):
+            text = page.extract_text() or ""
+            if len(text.strip()) >= SCAN_TEXT_THRESHOLD or transcribe is None:
+                pages.append(text)  # 文本页原样保留；无转写器时整体行为与现状一致
+                continue
+            scan_total += 1
+            if ocr_attempted >= MAX_OCR_PAGES:
+                limit_skipped += 1
+                pages.append(text)  # 超上限：保留原文本（可能为空）
+                continue
+            ocr: Optional[str] = None
+            try:
+                img = _rasterize_pdf_page(data, idx)
+                if img is not None:
+                    # 栅格化按尺寸可能降级为 JPEG，按魔数嗅探 mime（docs/13 §3.2）。
+                    img_mime = "image/png" if img.startswith(b"\x89PNG") else "image/jpeg"
+                    # 尝试即消耗配额（在调用前递增：transcribe 抛异常同样已付出一次
+                    # vision 往返）——失败页不计数会让护栏在 key 限流/空白图册等最需要
+                    # 止损的场景下失效，vision 调用次数实际无上限（评审#5/#18）。
+                    ocr_attempted += 1
+                    ocr = transcribe(img, img_mime)
+            except Exception as exc:  # noqa: BLE001 — 单页 OCR 失败降级保留原文本，不拖垮整份
+                logger.warning("pdf page OCR failed for %s (page %s): %s", file_name, idx + 1, exc)
+            # 采用闸（评审#6）：碎渣转写（strip 后 < MIN_OCR_TEXT_CHARS，如扉页/隔页
+            # OCR 出空或回显几个字符）不采用——保留原页文本、不计入 ocr_used，文本
+            # PDF 的内容寻址幂等不被切到 seed；尝试配额已在上面扣除。
+            if ocr and len(ocr.strip()) >= MIN_OCR_TEXT_CHARS:
+                ocr_done += 1
+                pages.append(f"〔第{idx + 1}页·OCR〕\n{ocr}")
+            else:
+                pages.append(text)
+        merged = "\n".join(pages).strip()
+        if limit_skipped:
+            # 注记语义（评审#5）：X=检出的扫描页总数，N=已尝试 OCR 的页数（含失败页）。
+            note = f"〔注：扫描页共{scan_total}页，仅前{ocr_attempted}页已尝试OCR〕"
+            merged = f"{merged}\n{note}" if merged else note
+        return (merged or None), ocr_done > 0
+    except Exception as exc:  # noqa: BLE001 — pdf 解析失败降级跳过（坏 PDF 必须仍返回 None）
+        logger.warning("pdf text extract failed for %s: %s", file_name, exc)
+        return None, False
+
+
 def extract_text(
     data: bytes,
     mime: str,
@@ -210,21 +376,14 @@ def extract_text(
 ) -> Optional[str]:
     """从附件字节提取纯文本；不可提取/失败返回 None（调用方跳过，不炸 run）。
 
-    transcribe：图片 OCR 转写器（B.2）——给了才对 image/* 转文本，否则图片仍返回 None。
+    transcribe：图片 OCR 转写器（B.2）——给了才对 image/* 转文本，否则图片仍返回 None；
+    C 批（docs/13）起 PDF 分支同样复用它做扫描页逐页 OCR（内部走 _extract_pdf_text，
+    丢弃 ocr_used 信号；需要该信号的调用方用 extract_text_ex）。
     """
     if is_image(mime) and transcribe is not None:
         return transcribe(data, mime)
     if is_pdf(mime, file_name):
-        try:
-            from pypdf import PdfReader  # 惰性：未装/损坏 pdf 都降级
-
-            reader = PdfReader(io.BytesIO(data))
-            pages = [(p.extract_text() or "") for p in reader.pages]
-            text = "\n".join(pages).strip()
-            return text or None
-        except Exception as exc:  # noqa: BLE001 — pdf 解析失败降级跳过
-            logger.warning("pdf text extract failed for %s: %s", file_name, exc)
-            return None
+        return _extract_pdf_text(data, file_name, transcribe)[0]
     if is_docx(mime, file_name):
         if not _office_zip_safe(data):
             logger.warning("docx 解压过大（疑似 zip-bomb），跳过: %s", file_name)
@@ -278,6 +437,27 @@ def extract_text(
         except Exception:  # noqa: BLE001
             return None
     return None
+
+
+def extract_text_ex(
+    data: bytes,
+    mime: str,
+    file_name: str = "",
+    *,
+    transcribe: Optional[Callable[[bytes, str], Optional[str]]] = None,
+) -> tuple[Optional[str], bool]:
+    """extract_text 的扩展版（C 批 docs/13 §3.3）：额外返回"是否发生过 OCR"。
+
+    ocr_used 仅对 PDF 扫描页 OCR 置 True——build_ingestor 据此把幂等键从内容寻址切到
+    dedup_seed=md5(文件字节)（转写漂移防重复入库）。图片分支恒 False：图片的种子由
+    build_ingestor 既有的 ocr_image 门负责，不动既有逻辑。
+    头部两个分支的判定顺序必须与 extract_text 保持一致（image 先于 pdf）。
+    """
+    if is_image(mime) and transcribe is not None:
+        return transcribe(data, mime), False
+    if is_pdf(mime, file_name):
+        return _extract_pdf_text(data, file_name, transcribe)
+    return extract_text(data, mime, file_name, transcribe=transcribe), False
 
 
 def build_image_transcriber(settings: Settings) -> Optional[Callable[[bytes, str], Optional[str]]]:
@@ -361,15 +541,18 @@ def build_ingestor(
             except Exception as exc:  # noqa: BLE001 — 单文件失败不拖垮其余
                 logger.warning("attachment download failed for ingest %s: %s", a.get("resource_key"), exc)
                 continue
-            text = extract_text(data, mime, fname, transcribe=_transcribe)
+            # C 批（docs/13）：改调 _ex 版拿 ocr_used 信号（扫描 PDF 是否发生过逐页 OCR）。
+            text, ocr_used = extract_text_ex(data, mime, fname, transcribe=_transcribe)
             if not text or not text.strip():
                 continue
             if len(text) > MAX_INGEST_CHARS:
                 text = text[:MAX_INGEST_CHARS] + "\n…（超长截断）"
             doc = {"text": text, "file_name": fname, "source_id": a["resource_key"]}
-            if ocr_image:
-                # 图片 OCR 文本每次转写会变——用图片字节内容哈希做稳定幂等种子，
-                # 保证同图重传/重跑原地 upsert，不因文本漂移而重复入库（评审#8）。
+            if ocr_image or ocr_used:
+                # OCR 文本每次转写会变（图片整图 OCR=ocr_image 既有门；扫描 PDF 逐页
+                # OCR=ocr_used，C 批 docs/13 §3.3）——用文件字节内容哈希做稳定幂等种子，
+                # 保证同文件重传/重跑原地 upsert，不因文本漂移而重复入库（评审#8）。
+                # 纯文本 PDF ocr_used=False 绝不带 seed：保持内容寻址幂等不变（回归红线）。
                 import hashlib as _hl
 
                 doc["dedup_seed"] = _hl.md5(data).hexdigest()

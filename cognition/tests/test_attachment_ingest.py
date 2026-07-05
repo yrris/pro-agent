@@ -130,3 +130,47 @@ async def test_uploaded_doc_retrievable_via_knowledge_search():
         config={"metadata": {"kb_id": "owner:别人", "request_id": "r1"}},
     )
     assert "来源" not in msg2.content
+
+
+async def test_image_gen_run_skips_attachment_auto_ingest():
+    """评审#23：生图 run（metadata.image_gen 置位）的附件是生成素材（底图/蒙版）而非
+    用户知识——Run 前置入库步整体跳过（不烧 vision OCR、不向知识库堆蒙版垃圾文档）；
+    普通 run 的附件入库行为不变（对照组）。"""
+    from langchain_core.messages import AIMessage
+    from langgraph.checkpoint.memory import MemorySaver
+
+    from cognition._genproto import agent_pb2
+    from cognition.graphs.react import build_react_graph
+    from cognition.providers.fake import MessageDrivenChatModel
+    from cognition.server.servicer import CognitionServicer
+    from cognition.tools.calculator import calculator
+
+    calls: list[tuple] = []
+
+    def recorder(atts, kb_id):
+        calls.append((tuple(a["file_name"] for a in atts), kb_id))
+        return [a["file_name"] for a in atts]
+
+    model = MessageDrivenChatModel(decide=lambda messages: AIMessage(content="好的"))
+    graph = build_react_graph(model, [calculator], checkpointer=MemorySaver(), max_steps=4)
+    servicer = CognitionServicer(react_graph=graph, settings=Settings(), ingest_attachments_fn=recorder)
+    att = agent_pb2.Attachment(
+        resource_key="uploads/u/g/aa-mask-1.png", file_name="mask-1.png",
+        mime_type="image/png", size=8,
+    )
+
+    def req(run_id: str, session: str, meta: dict):
+        return agent_pb2.RunRequest(
+            run_id=run_id, session_id=session, query="用蒙版局部重绘", agent_type="react",
+            metadata=meta, attachments=[att],
+        )
+
+    # 生图 run：入库预步整体跳过（底图/蒙版不进知识库、不触发 vision 转写）。
+    protos = [p async for p in servicer.Run(req("rg", "generate:s1", {"image_gen": "true"}), None)]
+    assert protos[-1].finish
+    assert calls == []
+
+    # 对照组：普通 run（无 image_gen）照常入库。
+    protos2 = [p async for p in servicer.Run(req("rn", "s2", {}), None)]
+    assert protos2[-1].finish
+    assert len(calls) == 1 and calls[0][0] == ("mask-1.png",)
