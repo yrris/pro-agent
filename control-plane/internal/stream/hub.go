@@ -11,6 +11,7 @@ import (
 
 	"my-agent/control-plane/internal/cognition"
 	"my-agent/control-plane/internal/event"
+	"my-agent/control-plane/internal/metrics"
 	"my-agent/control-plane/internal/store"
 )
 
@@ -69,8 +70,10 @@ func (h *Hub) Pump(ctx context.Context, runID string, s cognition.Stream, sink S
 		case <-ctx.Done():
 			// 客户端断开 → STOPPED；超时 → TIMEOUT。Python 侧随 gRPC 取消而停在最后 checkpoint。
 			if ctx.Err() == context.DeadlineExceeded {
+				metrics.PumpErrors().WithLabelValues("RUN_TIMEOUT").Inc()
 				return Result{Status: store.StatusTimeout, ErrorCode: "RUN_TIMEOUT"}
 			}
+			metrics.PumpErrors().WithLabelValues("CLIENT_GONE").Inc()
 			return Result{Status: store.StatusStopped, ErrorCode: "CLIENT_GONE"}
 
 		case <-ticker.C:
@@ -91,7 +94,11 @@ func (h *Hub) Pump(ctx context.Context, runID string, s cognition.Stream, sink S
 			if err := h.events.Append(ctx, e); err != nil { // 先落库
 				return failed("PERSIST_ERROR", err)
 			}
+			metrics.EventsPersisted().Inc()
+			// 帧计数不在此处：sse_frames_written 由真实 SSE sink 自身上报（api sseSink），
+			// 定时 headless run 的 nullSink 不注水、回放路径也能计入（docs/11 §3.2）。
 			if err := sink.WriteFrame(e); err != nil { // 再推送；写客户端失败按断开处理
+				metrics.PumpErrors().WithLabelValues("SINK_WRITE_ERROR").Inc()
 				return Result{Status: store.StatusStopped, ErrorCode: "SINK_WRITE_ERROR", ErrorMsg: err.Error()}
 			}
 			if e.Finish {
@@ -110,15 +117,19 @@ func (h *Hub) onStreamClosed(recvErrCh chan error) Result {
 	case err := <-recvErrCh:
 		if err == io.EOF {
 			// 流正常结束却没有 finish，属异常（缺终态事件）。
+			metrics.PumpErrors().WithLabelValues("STREAM_EOF_NO_FINISH").Inc()
 			return Result{Status: store.StatusFailed, ErrorCode: "STREAM_EOF_NO_FINISH", ErrorMsg: "cognition stream ended before finish"}
 		}
+		metrics.PumpErrors().WithLabelValues("STREAM_RECV_ERROR").Inc()
 		return Result{Status: store.StatusFailed, ErrorCode: "STREAM_RECV_ERROR", ErrorMsg: err.Error()}
 	default:
+		metrics.PumpErrors().WithLabelValues("STREAM_CLOSED").Inc()
 		return Result{Status: store.StatusFailed, ErrorCode: "STREAM_CLOSED"}
 	}
 }
 
 func failed(code string, err error) Result {
+	metrics.PumpErrors().WithLabelValues(code).Inc() // EVENT_INVALID / SEQ_GAP / PERSIST_ERROR
 	return Result{Status: store.StatusFailed, ErrorCode: code, ErrorMsg: err.Error()}
 }
 

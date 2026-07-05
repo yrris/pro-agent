@@ -6,10 +6,12 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"golang.org/x/sync/semaphore"
 
 	"my-agent/control-plane/internal/cognition"
+	"my-agent/control-plane/internal/metrics"
 	"my-agent/control-plane/internal/store"
 	"my-agent/control-plane/internal/stream"
 )
@@ -36,9 +38,13 @@ type StartCommand struct {
 	ApprovalResumeID string
 	ApprovalDecision string // "approved" | "rejected"
 	ApprovalComment  string
-	Query            string
-	AgentType        string // "react" | "plan_solve"
-	Attachments      []Attachment
+	// docs/14 会话分叉：分叉会话的第一条 run 携带（乘 metadata 走既有 Run RPC；空=普通 run）。
+	// 认知面据此把父 thread 分叉点 checkpoint 的 messages 播种进新 thread。
+	ForkFromSessionID string
+	ForkFromRunID     string
+	Query             string
+	AgentType         string // "react" | "plan_solve"
+	Attachments       []Attachment
 }
 
 // Dispatcher 持有并发闸与运行时协作者。
@@ -69,9 +75,11 @@ func New(maxConcurrent int64, runs store.RunRepository, client cognition.Client,
 // 必须在写任何 SSE 响应头之前调用，以便满载时能干净地回 429。
 func (d *Dispatcher) Admit() (release func(), ok bool) {
 	if !d.sem.TryAcquire(1) {
+		metrics.RunsRejected().Inc() // 429「优雅繁忙」可见化
 		return nil, false
 	}
-	return func() { d.sem.Release(1) }, true
+	metrics.RunsInFlight().Inc() // semaphore 不暴露占用数，在占用/释放处自计数
+	return func() { d.sem.Release(1); metrics.RunsInFlight().Dec() }, true
 }
 
 // Run 执行一次“已准入”的 run：建 run → 打开认知流 → 泵送 → 收口。
@@ -96,6 +104,7 @@ func (d *Dispatcher) Run(ctx context.Context, cmd StartCommand, sink stream.Sink
 	if log != nil {
 		log.Info("run start")
 	}
+	start := time.Now() // run 时长计时起点（CreateRun 后，docs/11 §3.2）
 
 	finCtx := context.WithoutCancel(ctx)
 
@@ -106,10 +115,13 @@ func (d *Dispatcher) Run(ctx context.Context, cmd StartCommand, sink stream.Sink
 	st, err := d.client.RunAgent(ctx, cognition.RunRequest{
 		RunID: cmd.RunID, SessionID: cmd.SessionID, Query: cmd.Query, AgentType: agentType, OutputFormat: cmd.OutputFormat, ImageGen: cmd.ImageGen,
 		ApprovalResumeID: cmd.ApprovalResumeID, ApprovalDecision: cmd.ApprovalDecision, ApprovalComment: cmd.ApprovalComment,
+		ForkFromSessionID: cmd.ForkFromSessionID, ForkFromRunID: cmd.ForkFromRunID,
 		MaxSteps: d.maxSteps, OwnerID: cmd.OwnerID, Attachments: atts,
 	})
 	if err != nil {
 		_ = d.runs.FinishRun(finCtx, store.FinishRunParams{RunID: cmd.RunID, Status: store.StatusFailed, ErrorMsg: err.Error()})
+		metrics.Runs().WithLabelValues(store.StatusFailed, agentType).Inc()
+		metrics.RunDuration().WithLabelValues(agentType).Observe(time.Since(start).Seconds())
 		if log != nil {
 			log.Error("open run stream failed", "err", err)
 		}
@@ -126,6 +138,12 @@ func (d *Dispatcher) Run(ctx context.Context, cmd StartCommand, sink stream.Sink
 	if ferr := d.runs.FinishRun(finCtx, fp); ferr != nil && log != nil {
 		log.Error("finish run failed", "err", ferr)
 	}
+	// run 生命周期指标收口：HTTP 与定时 headless run 都经此（docs/11 §3.4）。
+	metrics.Runs().WithLabelValues(res.Status, agentType).Inc()
+	metrics.RunDuration().WithLabelValues(agentType).Observe(time.Since(start).Seconds())
+	metrics.RunTokens().WithLabelValues("input").Add(float64(fp.InputTokens))
+	metrics.RunTokens().WithLabelValues("output").Add(float64(fp.OutputTokens))
+	metrics.ModelCalls().Add(float64(fp.ModelCalls))
 	if log != nil {
 		log.Info("run finished", "status", res.Status)
 	}

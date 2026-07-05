@@ -17,6 +17,7 @@ import (
 
 	"my-agent/control-plane/internal/dispatch"
 	"my-agent/control-plane/internal/event"
+	"my-agent/control-plane/internal/metrics"
 	"my-agent/control-plane/internal/store"
 )
 
@@ -82,9 +83,11 @@ func (s *Scheduler) fireDue(ctx context.Context) {
 		if sched.LastRunID != "" {
 			run, err := s.runs.GetRun(ctx, sched.LastRunID)
 			if err != nil {
-				continue // 探测失败：保守跳过，下拍重试
+				metrics.SchedulerSkipped().WithLabelValues("overlap").Inc() // 探测失败按重叠保守计
+				continue                                                    // 探测失败：保守跳过，下拍重试
 			}
 			if run.Status == store.StatusRunning && time.Since(run.CreatedAt) < s.runTimeout {
+				metrics.SchedulerSkipped().WithLabelValues("overlap").Inc()
 				continue
 			}
 		}
@@ -92,12 +95,14 @@ func (s *Scheduler) fireDue(ctx context.Context) {
 		select {
 		case s.slots <- struct{}{}:
 		default:
+			metrics.SchedulerSkipped().WithLabelValues("slots").Inc()
 			return
 		}
 		// 先 Admit 后 Claim（反序满载时静默丢一拍）。
 		release, ok := s.dispatcher.Admit()
 		if !ok {
 			<-s.slots
+			metrics.SchedulerSkipped().WithLabelValues("busy").Inc()
 			return // 系统满载：留行，下个 tick 重试
 		}
 		runID := uuid.NewString()
@@ -105,11 +110,13 @@ func (s *Scheduler) fireDue(ctx context.Context) {
 		if err != nil || !claimed {
 			release()
 			<-s.slots
+			metrics.SchedulerSkipped().WithLabelValues("claim").Inc()
 			if err != nil {
 				s.log.Warn("scheduler claim failed", "err", err)
 			}
 			continue // 已被禁用/边界竞争：放弃本条
 		}
+		metrics.SchedulerFired().Inc()
 		go func(sched store.Schedule) {
 			defer release()
 			defer func() { <-s.slots }()

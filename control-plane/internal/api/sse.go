@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"my-agent/control-plane/internal/event"
+	"my-agent/control-plane/internal/metrics"
 )
 
 // sseSink 把 Envelope 渲染成 SSE 帧写到 HTTP 响应。是 stream.Sink 的实现。
@@ -41,6 +42,9 @@ func (s *sseSink) WriteFrame(e event.Envelope) error {
 		return err
 	}
 	s.f.Flush()
+	// 帧计数在真实 SSE sink 上报（实时 Pump 与回放端点共用本 sink）：headless 定时
+	// run 的 nullSink 不再注水，指标语义=「真实写给 SSE 客户端的内容帧」（docs/11 §3.2）。
+	metrics.SSEFramesWritten().Inc()
 	return nil
 }
 

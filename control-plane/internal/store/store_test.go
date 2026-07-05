@@ -53,7 +53,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	if err := store.Migrate(ctx, pool); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `TRUNCATE events, runs CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE events, runs, session_forks CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	t.Cleanup(pool.Close)

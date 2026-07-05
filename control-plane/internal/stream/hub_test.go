@@ -5,12 +5,32 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"my-agent/control-plane/internal/event"
+	"my-agent/control-plane/internal/metrics"
 	"my-agent/control-plane/internal/store"
 )
+
+// framesWrittenValue 从 /metrics exposition 读 sse_frames_written 当前值（包级单例，
+// 断言只用增量）。
+func framesWrittenValue(t *testing.T) float64 {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	for _, ln := range strings.Split(rec.Body.String(), "\n") {
+		if rest, ok := strings.CutPrefix(ln, "myagent_sse_frames_written_total "); ok {
+			v, _ := strconv.ParseFloat(strings.TrimSpace(rest), 64)
+			return v
+		}
+	}
+	return 0
+}
 
 const ts = int64(1700000000000)
 
@@ -80,6 +100,7 @@ func TestPump_HappyPath(t *testing.T) {
 	}
 	repo := &fakeEventRepo{}
 	sink := &fakeSink{}
+	framesBefore := framesWrittenValue(t)
 	res := newHub(repo).Pump(context.Background(), "r1", &fakeStream{items: items}, sink)
 
 	if res.Status != store.StatusSuccess || res.Summary != "答案是 14" {
@@ -87,6 +108,11 @@ func TestPump_HappyPath(t *testing.T) {
 	}
 	if len(repo.appended) != 5 || len(sink.frames) != 5 {
 		t.Fatalf("expected 5 persisted & 5 sent, got %d/%d", len(repo.appended), len(sink.frames))
+	}
+	// sse_frames_written 已下沉到真实 SSE sink 自身上报：Pump 对 sink 类型无感知，
+	// 不得再无差别计数（否则 headless 定时 run 的 nullSink 会注水该指标）。
+	if got := framesWrittenValue(t) - framesBefore; got != 0 {
+		t.Fatalf("Pump 不应计 sse_frames_written（由 sink 上报），得到增量 %v", got)
 	}
 	for i, e := range repo.appended { // 先落库后展示，且顺序一致
 		if e.Seq != uint64(i+1) {

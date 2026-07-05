@@ -23,6 +23,7 @@ import (
 	"my-agent/control-plane/internal/event"
 	"my-agent/control-plane/internal/health"
 	"my-agent/control-plane/internal/kb"
+	"my-agent/control-plane/internal/metrics"
 	"my-agent/control-plane/internal/store"
 )
 
@@ -59,14 +60,21 @@ func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.
 	}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
+	// 请求指标中间件挂在 Recoverer 外层：handler panic 时内层 Recoverer 写的 500 经
+	// 指标中间件的 WrapResponseWriter 记为 status="500"——若挂内层，panic 会穿过计数
+	// 代码，最严重的一类错误（panic 500）恰好对「流量与错误率」全盲。
+	// docs/11 §3.3 红线不变：内部用 chi WrapResponseWriter 透传 Flusher，SSE 不受影响。
+	r.Use(metrics.HTTPMiddleware)
 	r.Use(middleware.Recoverer)
 	r.Get("/healthz", h.healthz)
+	r.Handle("/metrics", metrics.Handler()) // 与 /healthz 同级：只读、无副作用（docs/11 §3.1）
 	r.Post("/runs", h.startRun)
 	r.Get("/runs/{runID}/events", h.replay)
 	r.Post("/runs/{runID}/approvals", h.resolveApproval) // M11 HITL：决议→恢复 run（SSE）
 	r.Get("/sessions", h.listSessions)
 	r.Delete("/sessions/{sessionID}", h.deleteSession)
 	r.Get("/sessions/{sessionID}/runs", h.listSessionRuns)
+	r.Post("/sessions/{sessionID}/fork", h.forkSession) // docs/14 会话分叉（时间旅行）
 	r.Post("/uploads", h.upload)
 	// UX-1 Files 面板：用户知识库管理（读/删直连 Qdrant；上传入库走认知面 gRPC）。
 	r.Get("/kb/docs", h.listKbDocs)
@@ -140,10 +148,104 @@ func (h *handlers) startRun(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// docs/14 分叉播种触发：请求的会话是分叉登记的 → **每个 run 都附 fork 两键**，
+	// 幂等由认知面「目标 thread 已有 checkpoint 即跳过」闸兜底（已播种后附键是无害
+	// no-op）。曾用「own run 数==0 才附键」做第一道闸，但 run 行在播种前就已落库：
+	// 首条消息任何失败（认知面不可用/定位失败/瞬时 DB 错）都会永久关死播种，会话
+	// 静默降级成空记忆——恰是 docs/14 §2 明令禁止的最坏结果。恒附键让播种失败的
+	// 下一轮自动重试自愈，定位恒久失败则每轮诚实报错。
+	forkFromSessionID, forkFromRunID := "", ""
+	if body.SessionID != "" && h.sessions != nil {
+		fork, err := h.sessions.GetFork(r.Context(), ownerID, sessionID)
+		switch {
+		case err == nil:
+			// 播种源必须是锚点 run **实际执行所在的会话**（runs 表该行的 session_id，
+			// 即其 checkpoint 所在 thread——继承投影从不复制 run）：从继承轮再分叉
+			// （分叉的分叉）时锚点属更远祖先，直接用 fork.ParentSessionID 会让认知面
+			// 在错误 thread 里定位、播种必然失败。锚点 run 已删（父会话被删）则回退
+			// 直接父——键仍附上，认知面按既有路径幂等跳过或诚实报错，绝不静默失忆。
+			forkFromSessionID, forkFromRunID = fork.ParentSessionID, fork.ForkAfterRunID
+			if h.runs != nil {
+				anchor, aerr := h.runs.GetRun(r.Context(), fork.ForkAfterRunID)
+				switch {
+				case aerr == nil:
+					forkFromSessionID = anchor.SessionID
+				case errors.Is(aerr, store.ErrRunNotFound):
+					// 保持回退值，交认知面处理。
+				default:
+					writeProblem(w, http.StatusInternalServerError, "internal", aerr.Error())
+					return
+				}
+			}
+		case errors.Is(err, store.ErrForkNotFound):
+			// 非分叉会话：正常起跑。
+		default:
+			// 瞬时 DB 错误不得静默吞掉：无键 run 会在新 thread 落 checkpoint，认知面
+			// 幂等闸从此永久拦死补种。宁失败勿降级。
+			writeProblem(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+	}
+
 	h.streamRun(w, r, dispatch.StartCommand{
 		SessionID: sessionID, OwnerID: ownerID, Query: body.Query, AgentType: agentType, OutputFormat: body.OutputFormat, ImageGen: body.ImageGen,
+		ForkFromSessionID: forkFromSessionID, ForkFromRunID: forkFromRunID,
 		Attachments: atts,
 	})
+}
+
+type forkSessionRequest struct {
+	AfterRunID string `json:"afterRunId"`
+}
+
+// forkSession：POST /sessions/{sessionID}/fork —— 从某轮之后分叉出新会话（docs/14）。
+// 校验链：afterRunId 必填 → 属于该会话 timeline（own 或继承轮皆可为锚，覆盖"分叉的
+// 分叉"从继承轮再分）→ owner 匹配 → 已终态（RUNNING 快照未收口，409）。通过则登记
+// session_forks 并返回新 sessionId；播种发生在新会话第一条 run（见 startRun）。
+func (h *handlers) forkSession(w http.ResponseWriter, r *http.Request) {
+	if h.sessions == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "no_session_store", "会话存储未配置")
+		return
+	}
+	sessionID := chi.URLParam(r, "sessionID")
+	var body forkSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.AfterRunID == "" {
+		writeProblem(w, http.StatusBadRequest, "bad_request", "afterRunId 必填")
+		return
+	}
+	ownerID := ownerOf(r)
+	// timeline 成员校验一举三得：会话存在性、owner 隔离（SQL 内过滤，空=404 不泄露
+	// 存在性）、锚点∈timeline（含继承轮）。
+	runs, err := h.sessions.ListRunsBySession(r.Context(), ownerID, sessionID)
+	if err != nil {
+		writeProblem(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	var anchor *store.Run
+	for i := range runs {
+		if runs[i].RunID == body.AfterRunID {
+			anchor = &runs[i]
+			break
+		}
+	}
+	if len(runs) == 0 || anchor == nil {
+		writeProblem(w, http.StatusNotFound, "not_found", "run 不属于该会话或会话不存在")
+		return
+	}
+	if anchor.Status == store.StatusRunning {
+		// 快照未收口：该轮的 checkpoint 链还在演化，锚不住"这一轮结束时"的状态。
+		writeProblem(w, http.StatusConflict, "run_not_finished", "该轮仍在运行，结束后才能分叉")
+		return
+	}
+	newID := uuid.NewString()
+	if err := h.sessions.CreateFork(r.Context(), store.SessionFork{
+		SessionID: newID, ParentSessionID: sessionID, ForkAfterRunID: body.AfterRunID, OwnerID: ownerID,
+	}); err != nil {
+		h.log.Error("create fork failed", "err", err)
+		writeProblem(w, http.StatusInternalServerError, "internal", "分叉登记失败")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"sessionId": newID})
 }
 
 // streamRun：准入 → SSE 头 + X-Run-Id → 以 SSE 流承载一次 run（startRun 与审批恢复共用）。
@@ -330,6 +432,7 @@ type sessionSummaryJSON struct {
 	RunCount     int       `json:"runCount"`
 	CreatedAt    time.Time `json:"createdAt"`
 	LastActiveAt time.Time `json:"lastActiveAt"`
+	ForkedFrom   string    `json:"forkedFrom,omitempty"` // docs/14：父会话 id（非分叉为空缺省不序列化）
 }
 
 // listSessions 返回调用方的会话列表：runs 表按 session_id 聚合，lastActiveAt 降序。
@@ -357,6 +460,7 @@ func (h *handlers) listSessions(w http.ResponseWriter, r *http.Request) {
 		out = append(out, sessionSummaryJSON{
 			SessionID: s.SessionID, Title: s.Title, EntryAgent: s.EntryAgent,
 			RunCount: s.RunCount, CreatedAt: s.CreatedAt, LastActiveAt: s.LastActiveAt,
+			ForkedFrom: s.ForkedFrom,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
@@ -393,10 +497,15 @@ type sessionRunJSON struct {
 	FinalSummary string    `json:"finalSummary,omitempty"`
 	ErrorMsg     string    `json:"errorMsg,omitempty"`
 	CreatedAt    time.Time `json:"createdAt"`
+	Inherited    bool      `json:"inherited,omitempty"` // docs/14：继承自祖先会话的只读投影轮
 }
 
 // listSessionRuns 返回会话内 run 元数据（created_at 升序）。owner 过滤在 SQL 里，
-// 他人会话与不存在的会话同样返回空 → 统一 404，不泄露存在性。
+// 他人会话与不存在的会话同样返回空 → 404，不泄露存在性。fork 打破了 M7 的
+// 「空结果==会话不存在」等价：0-own-run 的分叉会话在父会话删除后 timeline 为空，
+// 但 ListSessions（forks 表驱动）仍列出它——存在性判定须与列表一致，否则侧栏可见、
+// 打开 404。故空结果再查 fork 登记：命中 → 200 + 空数组（owner 过滤在 SQL 内，无
+// 存在性泄露），未命中才 404。
 func (h *handlers) listSessionRuns(w http.ResponseWriter, r *http.Request) {
 	if h.sessions == nil {
 		writeProblem(w, http.StatusServiceUnavailable, "no_session_store", "会话存储未配置")
@@ -409,6 +518,13 @@ func (h *handlers) listSessionRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(runs) == 0 {
+		if _, ferr := h.sessions.GetFork(r.Context(), ownerOf(r), sessionID); ferr == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"sessionId": sessionID, "runs": []sessionRunJSON{}})
+			return
+		} else if !errors.Is(ferr, store.ErrForkNotFound) {
+			writeProblem(w, http.StatusInternalServerError, "internal", ferr.Error())
+			return
+		}
 		writeProblem(w, http.StatusNotFound, "not_found", "会话不存在")
 		return
 	}
@@ -416,7 +532,7 @@ func (h *handlers) listSessionRuns(w http.ResponseWriter, r *http.Request) {
 	for _, run := range runs {
 		j := sessionRunJSON{
 			RunID: run.RunID, Query: run.QueryText, AgentType: run.EntryAgent,
-			Status: run.Status, CreatedAt: run.CreatedAt,
+			Status: run.Status, CreatedAt: run.CreatedAt, Inherited: run.Inherited,
 		}
 		if run.FinalSummaryText != nil {
 			j.FinalSummary = *run.FinalSummaryText
@@ -470,7 +586,6 @@ func (h *handlers) usageStats(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, report)
 }
-
 
 // listArtifacts：GET /artifacts?limit=100 —— 跨会话产物画廊（owner 域，纯读）。
 func (h *handlers) listArtifacts(w http.ResponseWriter, r *http.Request) {

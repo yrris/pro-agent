@@ -37,7 +37,12 @@ type RunRequest struct {
 	ApprovalResumeID string
 	ApprovalDecision string
 	ApprovalComment  string
-	Attachments      []Attachment
+	// docs/14 会话分叉（经 metadata 两键传认知面，零 proto 改动——循审批三键先例）：
+	// 认知面用 fork_from_run_id 在父 thread 的 checkpoint 历史中定位"该轮结束时"的
+	// 快照，把 messages 通道播种进新 thread（本请求的 SessionID）。
+	ForkFromSessionID string
+	ForkFromRunID     string
+	Attachments       []Attachment
 }
 
 // Stream 是一次 run 的事件流；Recv 在流结束时返回 io.EOF。
@@ -120,6 +125,10 @@ func (c *grpcClient) RunAgent(ctx context.Context, req RunRequest) (Stream, erro
 		metadata["approval_resume_id"] = req.ApprovalResumeID
 		metadata["approval_decision"] = req.ApprovalDecision
 		metadata["approval_comment"] = req.ApprovalComment
+	}
+	if req.ForkFromSessionID != "" {
+		metadata["fork_from_session_id"] = req.ForkFromSessionID
+		metadata["fork_from_run_id"] = req.ForkFromRunID
 	}
 	if len(metadata) == 0 {
 		metadata = nil

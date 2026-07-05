@@ -34,6 +34,9 @@ type Run struct {
 	ErrorMsg         *string
 	CreatedAt        time.Time
 	FinishedAt       *time.Time
+	// Inherited 不是 runs 表的列：ListRunsBySession 沿 fork 链上溯拼装 timeline 时，
+	// 祖先会话的继承段标 true（原 run_id 原事件，只读投影，回放端点零改动；docs/14 §4.2）。
+	Inherited bool
 }
 
 // CreateRunParams 创建 run（状态默认 RUNNING）。

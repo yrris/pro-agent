@@ -18,6 +18,7 @@ import (
 	"my-agent/control-plane/internal/dispatch"
 	"my-agent/control-plane/internal/health"
 	"my-agent/control-plane/internal/kb"
+	"my-agent/control-plane/internal/metrics"
 	"my-agent/control-plane/internal/scheduler"
 	"my-agent/control-plane/internal/store"
 	"my-agent/control-plane/internal/stream"
@@ -34,6 +35,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
+	metrics.RegisterPgxPool(pool) // 连接池水位 gauge（docs/11 §3.2 pgpool 集）
 	if err := store.Migrate(ctx, pool); err != nil {
 		log.Error("migrate", "err", err)
 		os.Exit(1)
