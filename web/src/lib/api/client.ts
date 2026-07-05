@@ -1,9 +1,13 @@
-// 控制面 HTTP 客户端。全走相对路径（Vite proxy 转 :8080，零 CORS）；统一注入 X-User-Id。
+// 控制面 HTTP 客户端。全走相对路径（Vite proxy 转 :8080，零 CORS）；统一注入 X-User-Id +
+// Authorization: Bearer（D3，docs/17）。所有请求过同一 headers()，这是认证传播的全部表面——
+// AUTH_REQUIRED 关时后端 token 有则用无则回退 X-User-Id，故两头并存不冲突、老路径零回归。
 
-import { getUserId } from "../identity";
+import { getToken, getUserId } from "../identity";
 
 function headers(json = false): Record<string, string> {
   const h: Record<string, string> = { "X-User-Id": getUserId() || "anonymous" };
+  const token = getToken();
+  if (token) h["Authorization"] = `Bearer ${token}`;
   if (json) h["Content-Type"] = "application/json";
   return h;
 }
@@ -86,6 +90,8 @@ export function uploadFileWithProgress(
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `/uploads?sessionId=${encodeURIComponent(sessionId)}`);
     xhr.setRequestHeader("X-User-Id", getUserId() || "anonymous");
+    const token = getToken(); // D3：XHR 上传补 Authorization（不走 fetch 的 headers()）
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(e.loaded / e.total);
     };
@@ -328,6 +334,109 @@ export async function toggleSchedule(id: string, enabled: boolean): Promise<void
 }
 
 
+// —— D2 Proactive 连接器（docs/16）：连接器 + 触发规则 CRUD（三段式：fetch → 判 ok → 解析） ——
+
+export interface ConnectorItem {
+  connectorId: string;
+  kind: string; // 'github'
+  pollIntervalS: number;
+  enabled: boolean;
+  nextPollAt: string;
+  cursor?: string;
+  createdAt: string;
+  // 注意：PAT/密文绝不下发（后端 json:"-"），前端无从读取。
+}
+
+export async function listConnectors(): Promise<ConnectorItem[]> {
+  const res = await fetch("/connectors", { headers: headers() });
+  if (!res.ok) throw new Error(`listConnectors failed: ${res.status}`);
+  const data = (await res.json()) as { connectors: ConnectorItem[] };
+  return data.connectors ?? [];
+}
+
+export async function createConnector(body: {
+  kind: string;
+  pat: string;
+  pollIntervalS: number;
+}): Promise<void> {
+  const res = await fetch("/connectors", {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`createConnector failed: ${res.status}`);
+}
+
+export async function deleteConnector(id: string): Promise<void> {
+  const res = await fetch(`/connectors/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  if (!res.ok) throw new Error(`deleteConnector failed: ${res.status}`);
+}
+
+export async function toggleConnector(id: string, enabled: boolean): Promise<void> {
+  const res = await fetch(`/connectors/${encodeURIComponent(id)}/toggle`, {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) throw new Error(`toggleConnector failed: ${res.status}`);
+}
+
+export interface TriggerItem {
+  triggerId: string;
+  connectorId: string;
+  eventType: string;
+  filter?: Record<string, string>;
+  queryTemplate: string;
+  agentType: string;
+  needsApproval: boolean;
+  enabled: boolean;
+  createdAt: string;
+}
+
+export async function listTriggers(): Promise<TriggerItem[]> {
+  const res = await fetch("/triggers", { headers: headers() });
+  if (!res.ok) throw new Error(`listTriggers failed: ${res.status}`);
+  const data = (await res.json()) as { triggers: TriggerItem[] };
+  return data.triggers ?? [];
+}
+
+export async function createTrigger(body: {
+  connectorId: string;
+  eventType: string;
+  filter?: Record<string, string>;
+  queryTemplate: string;
+  agentType: string;
+  needsApproval: boolean;
+}): Promise<void> {
+  const res = await fetch("/triggers", {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`createTrigger failed: ${res.status}`);
+}
+
+export async function deleteTrigger(id: string): Promise<void> {
+  const res = await fetch(`/triggers/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  if (!res.ok) throw new Error(`deleteTrigger failed: ${res.status}`);
+}
+
+export async function toggleTrigger(id: string, enabled: boolean): Promise<void> {
+  const res = await fetch(`/triggers/${encodeURIComponent(id)}/toggle`, {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) throw new Error(`toggleTrigger failed: ${res.status}`);
+}
+
+
 // —— 跨会话产物画廊（Files 侧栏"产物"导航） ——
 
 export interface OwnerArtifact {
@@ -360,4 +469,140 @@ export async function listArtifacts(
   if (!res.ok) throw new Error(`listArtifacts failed: ${res.status}`);
   const data = (await res.json()) as { artifacts: OwnerArtifact[] };
   return data.artifacts ?? [];
+}
+
+
+// —— D3 鉴权（docs/17）：注册/登录/登出/我是谁。三段式：fetch → 判 ok → 解析。 ——
+
+export interface AuthInfo {
+  userId: string;
+  username: string;
+  role: string;
+  token: string;
+  expiresAt: string;
+}
+
+// login/register 失败抛带后端 message 的 Error（LoginView 展示："用户名或密码错误"/"用户名已被占用"）。
+async function postCredentials(path: string, username: string, password: string): Promise<AuthInfo> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    let msg = `请求失败（${res.status}）`;
+    try {
+      const body = (await res.json()) as { message?: string };
+      if (body.message) msg = body.message;
+    } catch {
+      /* 非 JSON 响应：用兜底文案 */
+    }
+    throw new Error(msg);
+  }
+  return (await res.json()) as AuthInfo;
+}
+
+export function login(username: string, password: string): Promise<AuthInfo> {
+  return postCredentials("/auth/login", username, password);
+}
+
+export function register(username: string, password: string): Promise<AuthInfo> {
+  return postCredentials("/auth/register", username, password);
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await fetch("/auth/logout", { method: "POST", headers: headers() });
+  } catch {
+    /* 登出即便网络失败也照常清本地——本地清 token 已足以"退出" */
+  }
+}
+
+export interface MeInfo {
+  userId: string;
+  username: string;
+  role: string;
+}
+
+// HTTP 错误：携带状态码，供调用方按状态分类（启动 me() 校验须区分 401 与 5xx/网络错误，见 #14）。
+export class ApiError extends Error {
+  constructor(public readonly status: number, message?: string) {
+    super(message ?? `HTTP ${status}`);
+    this.name = "ApiError";
+  }
+}
+
+// me() 启动校验的失败分类（#14）：**仅明确 401**（token 无效/过期）才应清本地登录态、回登录页；
+// 5xx/超时/网络错误一律返 false（保留 token、下次重试），避免后端滚动重启或弱网瞬断把有效登录误清。
+// fetch 网络失败抛 TypeError（无 status）→ instanceof ApiError 为假 → 归类为"非失效"。
+export function isAuthExpiredError(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 401;
+}
+
+// GET /auth/me：启动校验 token 有效性。401（失效）→ 抛 ApiError(401)，useAuth 据此（且仅据此）logout。
+export async function me(): Promise<MeInfo> {
+  const res = await fetch("/auth/me", { headers: headers() });
+  if (!res.ok) throw new ApiError(res.status, `me failed: ${res.status}`);
+  return (await res.json()) as MeInfo;
+}
+
+
+// —— D3 管理后台（/admin/*，requireAdmin 门控；非 admin 调用后端 403） ——
+
+export interface AdminUser {
+  userId: string;
+  username: string;
+  role: string;
+  createdAt: string;
+  runCount: number;
+}
+
+export async function listUsers(): Promise<AdminUser[]> {
+  const res = await fetch("/admin/users", { headers: headers() });
+  if (!res.ok) throw new Error(`listUsers failed: ${res.status}`);
+  const data = (await res.json()) as { users: AdminUser[] };
+  return data.users ?? [];
+}
+
+export async function setUserRole(userId: string, role: string): Promise<void> {
+  const res = await fetch(`/admin/users/${encodeURIComponent(userId)}/role`, {
+    method: "PATCH",
+    headers: headers(true),
+    body: JSON.stringify({ role }),
+  });
+  if (!res.ok) {
+    let msg = `setUserRole failed: ${res.status}`;
+    try {
+      const body = (await res.json()) as { message?: string };
+      if (body.message) msg = body.message;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(msg);
+  }
+}
+
+export interface AdminRun {
+  runId: string;
+  sessionId: string;
+  ownerId: string;
+  agentType: string;
+  query: string;
+  status: string;
+  createdAt: string;
+  finishedAt?: string;
+}
+
+export async function listAllRuns(limit = 100): Promise<AdminRun[]> {
+  const res = await fetch(`/admin/runs?limit=${limit}`, { headers: headers() });
+  if (!res.ok) throw new Error(`listAllRuns failed: ${res.status}`);
+  const data = (await res.json()) as { runs: AdminRun[] };
+  return data.runs ?? [];
+}
+
+// 系统级用量（跨 owner）：复用 UsageReport 形状。
+export async function adminStats(days = 30): Promise<UsageReport> {
+  const res = await fetch(`/admin/stats?days=${days}`, { headers: headers() });
+  if (!res.ok) throw new Error(`adminStats failed: ${res.status}`);
+  return (await res.json()) as UsageReport;
 }

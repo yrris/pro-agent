@@ -1,0 +1,380 @@
+import { useCallback, useEffect, useState } from "react";
+import { Loader2, Plug, Plus, RotateCw, ShieldAlert, Trash2, Zap } from "lucide-react";
+import { toast } from "sonner";
+import {
+  createConnector,
+  createTrigger,
+  deleteConnector,
+  deleteTrigger,
+  listConnectors,
+  listTriggers,
+  toggleConnector,
+  toggleTrigger,
+  type ConnectorItem,
+  type TriggerItem,
+} from "../lib/api/client";
+import {
+  canCreateConnector,
+  canCreateTrigger,
+  EVENT_TYPES,
+  eventTypeLabel,
+  POLL_INTERVALS,
+  pollIntervalLabel,
+  triggerFilter,
+  triggersByConnector,
+} from "../lib/connectorForm";
+import { AGENT_TYPES } from "../config";
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+
+// Proactive 连接器面板（docs/16）：授权 GitHub PAT → 建触发规则 → 平台按间隔轮询，
+// 命中事件自动起 run（高危动作走 HITL 审批）。降级：SECRET_MASTER_KEY 未配置时后端 503，
+// 面板显示未启用提示。产出走既有 run/会话链路（trig-* 固定会话）。
+export function ConnectorsPanel({ onOpenSession }: { onOpenSession?: (sessionId: string) => void }) {
+  const [connectors, setConnectors] = useState<ConnectorItem[] | null>(null);
+  const [triggers, setTriggers] = useState<TriggerItem[]>([]);
+  const [disabled, setDisabled] = useState(false); // 后端 503（未配置主密钥）
+  const [creatingConn, setCreatingConn] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState<string | null>(null);
+
+  // 连接器创建表单。
+  const [pat, setPat] = useState("");
+  const [interval, setIntervalS] = useState(3600);
+
+  // 触发规则创建表单（针对某连接器）。
+  const [trigForConn, setTrigForConn] = useState<string | null>(null);
+  const [eventType, setEventType] = useState("issue");
+  const [repo, setRepo] = useState("");
+  const [template, setTemplate] = useState("");
+  const [trigAgent, setTrigAgent] = useState("react");
+  const [needsApproval, setNeedsApproval] = useState(true);
+
+  const refresh = useCallback(async () => {
+    // #15：两侧独立取、独立处理错误——一侧失败绝不清空另一侧已加载数据（避免 triggers
+    // 单侧 500 把连接器列表抹成空、误显示"还没有连接器"）。
+    const [connRes, trigRes] = await Promise.allSettled([listConnectors(), listTriggers()]);
+    // 连接器侧管连接器列表 + disabled：503=未配置主密钥（展示启用引导，非报错）；其它=加载失败。
+    let featureDisabled = false;
+    if (connRes.status === "fulfilled") {
+      setConnectors(connRes.value);
+      setDisabled(false);
+    } else {
+      featureDisabled = String(connRes.reason).includes("503");
+      setConnectors([]);
+      setDisabled(featureDisabled);
+      if (!featureDisabled) toast.error("连接器加载失败");
+    }
+    // 触发规则侧独立：成功才更新；失败仅提示、保留已加载的连接器与旧触发规则（功能未启用时不重复报错）。
+    if (trigRes.status === "fulfilled") {
+      setTriggers(trigRes.value);
+    } else if (!featureDisabled) {
+      toast.error("触发规则加载失败");
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const onCreateConnector = async () => {
+    if (!canCreateConnector(pat)) return;
+    setBusy(true);
+    try {
+      await createConnector({ kind: "github", pat: pat.trim(), pollIntervalS: interval });
+      toast.success("连接器已创建");
+      setPat("");
+      setCreatingConn(false);
+      await refresh();
+    } catch {
+      toast.error("创建失败（PAT 无效或未配置主密钥）");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onCreateTrigger = async (connectorId: string) => {
+    if (!canCreateTrigger(connectorId, template)) return;
+    setBusy(true);
+    try {
+      await createTrigger({
+        connectorId,
+        eventType,
+        filter: triggerFilter(repo),
+        queryTemplate: template.trim(),
+        agentType: trigAgent,
+        needsApproval,
+      });
+      toast.success("触发规则已创建");
+      setTemplate("");
+      setRepo("");
+      setTrigForConn(null);
+      await refresh();
+    } catch {
+      toast.error("创建规则失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const twoStepDelete = (id: string, del: () => Promise<void>) => {
+    if (confirming !== id) {
+      setConfirming(id);
+      setTimeout(() => setConfirming((c) => (c === id ? null : c)), 3000);
+      return;
+    }
+    setConfirming(null);
+    void del().then(refresh).catch(() => toast.error("删除失败"));
+  };
+
+  const byConn = triggersByConnector(triggers);
+
+  return (
+    <div className="flex h-full flex-col" data-testid="connectors-panel">
+      <div className="flex items-center gap-1.5 border-b px-3 py-2">
+        <span className="min-w-0 flex-1 truncate text-xs text-stone-500">连接器（Proactive · GitHub）</span>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setCreatingConn((v) => !v)}
+          aria-label="新建连接器"
+          data-testid="connector-new"
+          className="size-7 text-stone-400 hover:text-foreground"
+        >
+          <Plus />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => void refresh()}
+          aria-label="刷新"
+          className="size-7 text-stone-400 hover:text-foreground"
+        >
+          <RotateCw />
+        </Button>
+      </div>
+
+      {creatingConn && (
+        <div className="space-y-2 border-b p-3">
+          <Input
+            type="password"
+            value={pat}
+            onChange={(e) => setPat(e.target.value)}
+            placeholder="GitHub Personal Access Token（notifications 读取权限）"
+            data-testid="connector-pat"
+            className="text-sm"
+          />
+          <div className="flex items-center gap-1.5">
+            <Select value={String(interval)} onValueChange={(v) => setIntervalS(Number(v))}>
+              <SelectTrigger size="sm" className="flex-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {POLL_INTERVALS.map((i) => (
+                  <SelectItem key={i.value} value={String(i.value)}>
+                    {i.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              size="sm"
+              onClick={() => void onCreateConnector()}
+              disabled={busy || !canCreateConnector(pat)}
+              data-testid="connector-submit"
+              className="bg-primary text-primary-foreground hover:bg-primary/85"
+            >
+              {busy ? <Loader2 className="animate-spin" /> : "授权连接"}
+            </Button>
+          </div>
+          <p className="text-[10px] leading-relaxed text-stone-600">
+            PAT 经 AES-GCM 加密列存，明文绝不落库/日志；仅用于向 GitHub 拉取你的通知。
+          </p>
+        </div>
+      )}
+
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="p-2">
+          {connectors === null && <div className="p-3 text-xs text-stone-500">加载中…</div>}
+          {disabled && (
+            <div className="p-4 text-center text-xs leading-relaxed text-stone-500">
+              连接器功能未启用。
+              <br />需在控制面配置 SECRET_MASTER_KEY（32 字节 base64）后重启。
+            </div>
+          )}
+          {connectors?.length === 0 && !disabled && !creatingConn && (
+            <div className="p-4 text-center text-xs leading-relaxed text-stone-500">
+              还没有连接器。
+              <br />点 + 授权 GitHub PAT：平台会按间隔轮询你的通知，命中规则自动起 run。
+            </div>
+          )}
+
+          {connectors?.map((c) => {
+            const trigs = byConn.get(c.connectorId) ?? [];
+            return (
+              <div
+                key={c.connectorId}
+                data-testid="connector-row"
+                className="group mb-2 rounded-lg border border-border/60 p-2"
+              >
+                <div className="flex items-center gap-2">
+                  <Plug className={`size-4 shrink-0 ${c.enabled ? "text-primary" : "text-stone-600"}`} />
+                  <span className="min-w-0 flex-1 truncate text-sm text-stone-200">
+                    github · {pollIntervalLabel(c.pollIntervalS)}
+                  </span>
+                  <button
+                    onClick={() =>
+                      void toggleConnector(c.connectorId, !c.enabled).then(refresh).catch(() => toast.error("更新失败"))
+                    }
+                    className="shrink-0 text-[10px] text-stone-500 hover:text-foreground"
+                  >
+                    {c.enabled ? "轮询中（暂停）" : "已暂停（启用）"}
+                  </button>
+                  <button
+                    onClick={() => twoStepDelete(c.connectorId, () => deleteConnector(c.connectorId))}
+                    title={confirming === c.connectorId ? "再点一次确认删除" : "删除连接器"}
+                    className={`shrink-0 rounded p-1 transition-colors ${
+                      confirming === c.connectorId
+                        ? "bg-destructive/20 text-destructive"
+                        : "text-stone-500 opacity-0 hover:text-destructive group-hover:opacity-100"
+                    }`}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
+
+                {/* 触发规则子表 */}
+                <div className="mt-1.5 space-y-1 pl-6">
+                  {trigs.map((t) => (
+                    <div key={t.triggerId} data-testid="trigger-row" className="flex items-center gap-2 text-[11px]">
+                      <Zap className={`size-3 shrink-0 ${t.enabled ? "text-amber-500" : "text-stone-600"}`} />
+                      <span className="shrink-0 rounded bg-accent/60 px-1 text-stone-300">{eventTypeLabel(t.eventType)}</span>
+                      {t.filter?.repo && <span className="shrink-0 text-stone-500">{t.filter.repo}</span>}
+                      <button
+                        onClick={() => onOpenSession?.(`trig-${t.triggerId.slice(0, 8)}`)}
+                        title="打开该规则的会话"
+                        className="min-w-0 flex-1 truncate text-left text-stone-400 hover:text-primary"
+                      >
+                        {t.queryTemplate}
+                      </button>
+                      {t.needsApproval && (
+                        <ShieldAlert className="size-3 shrink-0 text-stone-500" aria-label="高危动作需审批" />
+                      )}
+                      <button
+                        onClick={() =>
+                          void toggleTrigger(t.triggerId, !t.enabled).then(refresh).catch(() => toast.error("更新失败"))
+                        }
+                        className="shrink-0 text-stone-500 hover:text-foreground"
+                      >
+                        {t.enabled ? "开" : "关"}
+                      </button>
+                      <button
+                        onClick={() => twoStepDelete(t.triggerId, () => deleteTrigger(t.triggerId))}
+                        title={confirming === t.triggerId ? "再点一次确认删除" : "删除规则"}
+                        className={`shrink-0 rounded p-0.5 ${
+                          confirming === t.triggerId ? "text-destructive" : "text-stone-600 hover:text-destructive"
+                        }`}
+                      >
+                        <Trash2 className="size-3" />
+                      </button>
+                    </div>
+                  ))}
+
+                  {trigForConn === c.connectorId ? (
+                    <div className="space-y-1.5 rounded-md border border-border/60 p-2">
+                      <div className="flex items-center gap-1.5">
+                        <Select value={eventType} onValueChange={setEventType}>
+                          <SelectTrigger size="sm" className="flex-1">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {EVENT_TYPES.map((e) => (
+                              <SelectItem key={e.value} value={e.value}>
+                                {e.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Input
+                          value={repo}
+                          onChange={(e) => setRepo(e.target.value)}
+                          placeholder="repo 过滤 owner/name（可空）"
+                          data-testid="trigger-repo"
+                          className="h-8 flex-1 text-xs"
+                        />
+                      </div>
+                      <Textarea
+                        value={template}
+                        onChange={(e) => setTemplate(e.target.value)}
+                        rows={2}
+                        placeholder="query 模板：可用 {{title}} {{url}} {{repo}}，例如：为「{{title}}」起草一条回复"
+                        data-testid="trigger-template"
+                        className="min-h-0 resize-none text-xs"
+                      />
+                      <div className="flex items-center gap-1.5">
+                        <Select value={trigAgent} onValueChange={setTrigAgent}>
+                          <SelectTrigger size="sm" className="flex-1">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {AGENT_TYPES.map((a) => (
+                              <SelectItem key={a.value} value={a.value}>
+                                {a.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <label className="flex shrink-0 items-center gap-1 text-[11px] text-stone-400">
+                          <input
+                            type="checkbox"
+                            checked={needsApproval}
+                            onChange={(e) => setNeedsApproval(e.target.checked)}
+                            data-testid="trigger-approval"
+                          />
+                          需审批
+                        </label>
+                        <Button
+                          size="sm"
+                          onClick={() => void onCreateTrigger(c.connectorId)}
+                          disabled={busy || !canCreateTrigger(c.connectorId, template)}
+                          data-testid="trigger-submit"
+                          className="bg-primary text-primary-foreground hover:bg-primary/85"
+                        >
+                          {busy ? <Loader2 className="animate-spin" /> : "添加"}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setTrigForConn(c.connectorId);
+                        setTemplate("");
+                        setRepo("");
+                      }}
+                      data-testid="trigger-new"
+                      className="flex items-center gap-1 text-[11px] text-stone-500 hover:text-primary"
+                    >
+                      <Plus className="size-3" /> 添加触发规则
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </ScrollArea>
+      <div className="border-t p-2 text-[10px] leading-relaxed text-stone-600">
+        命中事件自动起 run（进规则专属会话）；标「需审批」的规则里，高危动作会挂起等你在对话里审批。
+      </div>
+    </div>
+  );
+}

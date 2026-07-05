@@ -9,7 +9,9 @@ import {
   ImagePlus,
   MessageSquare,
   PanelLeft,
+  Plug,
   Plus,
+  Shield,
   Trash2,
 } from "lucide-react";
 import type { SessionView } from "../lib/sessions";
@@ -118,6 +120,7 @@ export function Sidebar({
   onToggleSidebar,
   health,
   userId,
+  isAdmin,
   onOpenUsage,
   onLogout,
 }: {
@@ -131,6 +134,7 @@ export function Sidebar({
   onToggleSidebar: () => void;
   health: HealthReport | null;
   userId: string;
+  isAdmin: boolean;
   onOpenUsage: () => void;
   onLogout: () => void;
 }) {
@@ -179,6 +183,11 @@ export function Sidebar({
         <NavItem icon={<FolderOpen className="size-4" />} label="产物" active={activeNav === "artifacts"} onClick={() => onNavChange("artifacts")} />
         <NavItem icon={<Database className="size-4" />} label="知识库" active={activeNav === "kb"} onClick={() => onNavChange("kb")} />
         <NavItem icon={<CalendarClock className="size-4" />} label="定时任务" active={activeNav === "schedules"} onClick={() => onNavChange("schedules")} />
+        <NavItem icon={<Plug className="size-4" />} label="连接器" active={activeNav === "connectors"} onClick={() => onNavChange("connectors")} />
+        {/* D3：管理后台入口仅 admin 可见（前端隐藏是 UX，真校验在后端 requireAdmin）。 */}
+        {isAdmin && (
+          <NavItem icon={<Shield className="size-4" />} label="管理后台" active={activeNav === "admin"} onClick={() => onNavChange("admin")} />
+        )}
       </div>
 
       {/* 会话列表（仅"对话"视图下显示） */}

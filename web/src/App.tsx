@@ -8,7 +8,9 @@ import { UsageDialog } from "./components/UsageDialog";
 import { Sidebar } from "./components/Sidebar";
 import { KnowledgePanel } from "./components/FilesPanel";
 import { SchedulesPanel } from "./components/SchedulesPanel";
+import { ConnectorsPanel } from "./components/ConnectorsPanel";
 import { ArtifactsGallery } from "./components/ArtifactsGallery";
+import { AdminPanel } from "./components/AdminPanel";
 import { GenerateWorkspace } from "./components/GenerateWorkspace";
 import { deleteSession, forkSession, listServerSessions, type AttachmentRef, type ServerSession } from "./lib/api/client";
 import {
@@ -27,7 +29,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 export default function App() {
-  const { userId, isAuthed, login, logout } = useAuth();
+  const { userId, isAuthed, isAdmin, login, register, logout } = useAuth();
   const health = useHealth();
   const run = useRunStream();
 
@@ -48,6 +50,8 @@ export default function App() {
   const [drafts, setDrafts] = useState<SessionMeta[]>(() => listLocalSessions());
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const sessions = useMemo(() => mergeSessions(serverSessions, drafts), [serverSessions, drafts]);
+  // 首次拿到列表后自动预热最近会话的标记（换用户时须复位——见下方身份边界清态 effect）。
+  const didAutoSelect = useRef(false);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -59,6 +63,23 @@ export default function App() {
       /* 服务端暂不可达：沿用现有列表（本地草稿兜底），不清空视图 */
     }
   }, []);
+
+  // 身份边界清态（#13，docs/17）：userId 变化（登出置空 / 同浏览器换用户登录）→ 强制清空
+  // 一切内存用户态——对话 timeline/live、当前会话、会话列表、导航视图、自动预热标记——
+  // 杜绝换用户后主区/侧栏残留上一用户的对话/会话/产物（跨租户数据暴露）。
+  // ref 守卫：仅在 userId 真正切换时触发；初次挂载/整页刷新（prev===当前）不重置，
+  // 保住持久化的 activeNav 等零回归。清态在下方登录重载 effect 之前跑，随后由其按新用户重填。
+  const prevUserRef = useRef(userId);
+  useEffect(() => {
+    if (prevUserRef.current === userId) return;
+    prevUserRef.current = userId;
+    run.resetAll();
+    setCurrentSessionId(null);
+    setServerSessions([]);
+    setDrafts([]);
+    setActiveNav("chat");
+    didAutoSelect.current = false;
+  }, [userId, run]);
 
   // 登录后：重读该用户的本地草稿（按用户隔离）并拉服务端列表。
   useEffect(() => {
@@ -96,7 +117,6 @@ export default function App() {
   );
 
   // 首次拿到会话列表且尚未选中任何会话 → 自动进入最近会话（刷新页面后直接续聊）。
-  const didAutoSelect = useRef(false);
   useEffect(() => {
     if (didAutoSelect.current || currentSessionId || sessions.length === 0) return;
     didAutoSelect.current = true;
@@ -185,7 +205,9 @@ export default function App() {
     run.resetAll();
   }, [sessions, currentSessionId, agentType, run]);
 
-  if (!isAuthed) return <LoginView onLogin={login} />;
+  if (!isAuthed) return <LoginView onLogin={login} onRegister={register} />;
+  // D3：非 admin 若持久化的 activeNav 停在 "admin"（如降权后），回退到对话——不渲染后台。
+  const effectiveNav: NavView = activeNav === "admin" && !isAdmin ? "chat" : activeNav;
   return (
     <TooltipProvider delayDuration={200}>
     <div className="flex h-full">
@@ -195,7 +217,7 @@ export default function App() {
         <Sidebar
           sessions={sessions}
           currentSessionId={currentSessionId}
-          activeNav={activeNav}
+          activeNav={effectiveNav}
           onNavChange={setActiveNav}
           onNewSession={onNewSession}
           onSelectSession={(id) => void selectSession(id)}
@@ -203,6 +225,7 @@ export default function App() {
           onToggleSidebar={() => setSidebarOpen(false)}
           health={health}
           userId={userId}
+          isAdmin={isAdmin}
           onOpenUsage={() => setUsageOpen(true)}
           onLogout={logout}
         />
@@ -222,9 +245,9 @@ export default function App() {
       )}
       <div className="flex min-h-0 flex-1 flex-col">
         {/* ChatView 常挂载（保住流式 DOM/滚动位置），非 chat 视图用 hidden 盖住 */}
-        <div className={activeNav === "chat" ? "flex min-h-0 flex-1" : "hidden"}>
+        <div className={effectiveNav === "chat" ? "flex min-h-0 flex-1" : "hidden"}>
           <ChatView
-            visible={activeNav === "chat"}
+            visible={effectiveNav === "chat"}
             timeline={run.timeline}
             live={run.live}
             status={run.status}
@@ -242,18 +265,25 @@ export default function App() {
             onForkTurn={(afterRunId) => void onForkTurn(afterRunId)}
           />
         </div>
-        {activeNav === "generate" && <GenerateWorkspace />}
-        {activeNav === "artifacts" && <ArtifactsGallery onOpenSession={(id) => void selectSession(id)} />}
-        {activeNav === "kb" && (
+        {effectiveNav === "generate" && <GenerateWorkspace />}
+        {effectiveNav === "artifacts" && <ArtifactsGallery onOpenSession={(id) => void selectSession(id)} />}
+        {effectiveNav === "kb" && (
           <div className="mx-auto min-h-0 w-full max-w-4xl flex-1">
             <KnowledgePanel />
           </div>
         )}
-        {activeNav === "schedules" && (
+        {effectiveNav === "schedules" && (
           <div className="mx-auto min-h-0 w-full max-w-4xl flex-1">
             <SchedulesPanel onOpenSession={(id) => void selectSession(id)} />
           </div>
         )}
+        {effectiveNav === "connectors" && (
+          <div className="mx-auto min-h-0 w-full max-w-4xl flex-1">
+            <ConnectorsPanel onOpenSession={(id) => void selectSession(id)} />
+          </div>
+        )}
+        {/* D3：管理后台仅 admin（effectiveNav 已把非 admin 的 "admin" 回退到 chat）。 */}
+        {effectiveNav === "admin" && isAdmin && <AdminPanel currentUserId={userId} />}
       </div>
     </div>
     </TooltipProvider>

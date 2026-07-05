@@ -4,8 +4,10 @@
 const KEY = "my-agent.ui";
 
 // 左侧栏导航项 = 主区视图路由（对齐 Claude 官网侧栏导航）。
-export type NavView = "chat" | "generate" | "artifacts" | "kb" | "schedules";
-const NAV_VIEWS: NavView[] = ["chat", "generate", "artifacts", "kb", "schedules"];
+// "admin" 仅 admin 角色可见（Sidebar 用 isAdmin 门控），但必须在 NAV_VIEWS 里，
+// 否则 admin 停在后台刷新时持久化的 activeNav 会被打回 chat（docs/17 §3.4）。
+export type NavView = "chat" | "generate" | "artifacts" | "kb" | "schedules" | "connectors" | "admin";
+const NAV_VIEWS: NavView[] = ["chat", "generate", "artifacts", "kb", "schedules", "connectors", "admin"];
 
 export interface UiPrefs {
   sidebarOpen: boolean;
