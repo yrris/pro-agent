@@ -163,7 +163,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	if err := store.Migrate(ctx, pool); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `TRUNCATE events, runs, session_forks CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE events, runs, session_forks, users, auth_sessions CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 
@@ -186,8 +186,50 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 	events := store.NewEventRepository(pool)
 	hub := stream.NewHub(events, time.Hour, discardLogger())
 	d := dispatch.New(4, runs, client, hub, 40, discardLogger())
-	router := api.NewRouter(d, runs, store.NewSessionRepository(pool), events, nil, nil, nil, nil, nil, nil, nil, time.Minute, "", discardLogger())
+	// D3：装配真实 user/token repo（e2e 覆盖注册→登录→带 token run 归属正确）。
+	router := api.NewRouter(d, runs, store.NewSessionRepository(pool), events, nil, nil, nil, nil, nil, nil, nil,
+		store.NewUserRepository(pool), store.NewSessionTokenRepository(pool), nil, nil, time.Minute, "", discardLogger())
 	return &e2eEnv{ctx: ctx, runs: runs, events: events, router: router, cog: cog}
+}
+
+// D3 e2e（docs/17 §6）：注册 → 带 token 发 run → run 归属 = token 身份（且 X-User-Id 头被忽略）。
+func TestEndToEnd_AuthTokenOwnership(t *testing.T) {
+	env := newE2EEnv(t)
+
+	// 注册取 token。
+	rec := httptest.NewRequest(http.MethodPost, "/auth/register",
+		strings.NewReader(`{"username":"u-tok","password":"secret123"}`))
+	rec.Header.Set("Content-Type", "application/json")
+	regRec := httptest.NewRecorder()
+	env.router.ServeHTTP(regRec, rec)
+	if regRec.Code != http.StatusOK {
+		t.Fatalf("register: %d %s", regRec.Code, regRec.Body.String())
+	}
+	var reg struct{ Token string }
+	_ = json.Unmarshal(regRec.Body.Bytes(), &reg)
+	if reg.Token == "" {
+		t.Fatal("register 无 token")
+	}
+
+	// 带 token 发 run，且故意附一个不同的 X-User-Id 头——token 身份须胜出（头被忽略）。
+	req := httptest.NewRequest(http.MethodPost, "/runs", strings.NewReader(`{"query":"算 2*(3+4)","sessionId":"s-tok"}`))
+	req.Header.Set("Authorization", "Bearer "+reg.Token)
+	req.Header.Set("X-User-Id", "someone-else")
+	runRec := httptest.NewRecorder()
+	env.router.ServeHTTP(runRec, req)
+	runID := runRec.Header().Get("X-Run-Id")
+	if runID == "" {
+		t.Fatalf("run 未启动: %d %s", runRec.Code, runRec.Body.String())
+	}
+	// 认知面收到的 owner_id = token 身份。
+	if got := env.cog.lastReq(); got == nil || got.GetMetadata()["owner_id"] != "u-tok" {
+		t.Fatalf("owner_id 应为 token 身份 u-tok: %v", env.cog.lastReq().GetMetadata())
+	}
+	// 落库 run 归属 u-tok（而非 X-User-Id 头的 someone-else）。
+	run, err := env.runs.GetRun(env.ctx, runID)
+	if err != nil || run.OwnerID != "u-tok" {
+		t.Fatalf("run 归属应为 u-tok: %+v err=%v", run, err)
+	}
 }
 
 // M8：附件引用与 owner 元数据贯通 startRun→gRPC；伪造 key 在 SSE 开始前被 403。

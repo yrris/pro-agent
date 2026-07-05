@@ -8,6 +8,9 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/semaphore"
 
 	"my-agent/control-plane/internal/cognition"
@@ -15,6 +18,10 @@ import (
 	"my-agent/control-plane/internal/store"
 	"my-agent/control-plane/internal/stream"
 )
+
+// tracer 是 dispatch 的 OTel tracer（docs/18 §3.1 一 run 一根 span）。
+// OTel 未启用时它取全局 no-op provider，Start 返回 no-op span——零导出、零开销。
+var tracer = otel.Tracer("my-agent/control-plane/dispatch")
 
 // ErrBusy 表示并发已达上限（背压）。上层应回 429“系统繁忙”。
 var ErrBusy = errors.New("dispatch: system busy")
@@ -90,11 +97,26 @@ func (d *Dispatcher) Run(ctx context.Context, cmd StartCommand, sink stream.Sink
 	if agentType == "" {
 		agentType = "react"
 	}
+	// OTel 根 span（docs/18 §3.1）：run 单收口——HTTP 与定时 headless run 都过此。
+	// 带 span 的 ctx 下传 client.RunAgent，otelgrpc stats handler 据此把 traceparent
+	// 写进 outgoing metadata，Python 拦截器接力建 server span。未启用时是 no-op span。
+	ctx, span := tracer.Start(ctx, "agent.run", trace.WithAttributes(
+		attribute.String("run_id", cmd.RunID),
+		attribute.String("session_id", cmd.SessionID),
+		attribute.String("agent_type", agentType),
+	))
+	defer span.End()
 	// run-scoped 结构化日志：关联键与 Python 认知面一致（run_id/session_id/agent_type），
-	// 便于用同一 run_id 跨进程串起 Go↔Python 全链路。
+	// 便于用同一 run_id 跨进程串起 Go↔Python 全链路。启用 OTel 时再补 trace_id（与
+	// Python 侧 format(trace_id,'032x') 同为 32 位 hex），可用同一 trace_id grep 两面日志；
+	// 未启用时 SpanContext 全零（IsValid=false），不落 trace_id，保持零行为变化。
 	var log *slog.Logger
 	if d.log != nil {
-		log = d.log.With("run_id", cmd.RunID, "session_id", cmd.SessionID, "agent_type", agentType)
+		fields := []any{"run_id", cmd.RunID, "session_id", cmd.SessionID, "agent_type", agentType}
+		if tid := span.SpanContext().TraceID(); tid.IsValid() {
+			fields = append(fields, "trace_id", tid.String())
+		}
+		log = d.log.With(fields...)
 	}
 	if err := d.runs.CreateRun(ctx, store.CreateRunParams{
 		RunID: cmd.RunID, SessionID: cmd.SessionID, OwnerID: cmd.OwnerID, EntryAgent: agentType, QueryText: cmd.Query,

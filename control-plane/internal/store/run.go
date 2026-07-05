@@ -67,6 +67,26 @@ type RunRepository interface {
 	GetRun(ctx context.Context, runID string) (Run, error)
 }
 
+// AllRunsLister 是 admin 后台的**跨 owner** 只读端口（docs/17 §3.3）。
+// 刻意与 RunRepository 分开：既有 RunRepository 的 fake（api 测试）零改，且普通用户端点
+// 绝不经此路径——admin 跨 owner 读用新方法，既有 WHERE owner_id 过滤一处不弱化。
+// pgRunRepo 同时实现它；api 层对已装配的 RunRepository 做类型断言取用（fake/nil 自然降级 503）。
+type AllRunsLister interface {
+	ListAllRuns(ctx context.Context, limit int, before time.Time) ([]Run, error)
+}
+
+// AllRunsPager 是带**复合游标**（created_at + run_id tie-breaker，全精度 before）的
+// admin 只读端口（#10）。旧 AllRunsLister 的 `WHERE created_at < before` 缺 run_id 平手项，
+// 且调用方（api/admin.go）把 before 以 unix 毫秒还原（time.UnixMilli），毫秒截断微秒精度的
+// created_at——两者叠加会在页边界静默丢 run（落在同一毫秒/同一时刻但 run_id 更小者被整段排除）。
+// 本端口的游标携带上一页末项的完整 created_at + run_id，查询用 (created_at, run_id) < ($1, $2)
+// 复合比较（对齐 artifact_list.go / ListRunsBySession 的 (ts,id) 范式），杜绝丢/重。
+// pgRunRepo 同时实现它；api/admin.go 应迁移到本端口并停止毫秒截断（传 RFC3339Nano/微秒 before
+// + beforeKey=上一页末项 run_id）以端到端闭合 #10——该迁移在 api 包（本次改动范围外）。
+type AllRunsPager interface {
+	ListAllRunsPaged(ctx context.Context, limit int, before time.Time, beforeKey string) ([]Run, error)
+}
+
 type pgRunRepo struct{ pool *pgxpool.Pool }
 
 // NewRunRepository 返回基于 pgx 的 RunRepository。
@@ -131,4 +151,50 @@ func (r *pgRunRepo) GetRun(ctx context.Context, runID string) (Run, error) {
 		return Run{}, fmt.Errorf("store: get run: %w", err)
 	}
 	return run, nil
+}
+
+// ListAllRuns 返回**跨 owner** 的最近 runs（created_at 降序），供 admin 后台。
+// before 非零时做 keyset 分页。limit 上限 200 防拉全表。
+// 与 GetRun 不同：不做任何 owner 过滤——调用方（api/admin.go）已挂 requireAdmin 门控。
+//
+// 兼容垫片：委托到 ListAllRunsPaged（beforeKey=""）。因 run_id 恒非空 UUID，
+// (created_at, run_id) < (before, 空串) 恰等价于旧的 created_at < before——本方法行为逐字不变
+// （零回归，保 api/admin.go 与既有 fake 编译）；带 run_id 平手项的正确分页走 ListAllRunsPaged。
+func (r *pgRunRepo) ListAllRuns(ctx context.Context, limit int, before time.Time) ([]Run, error) {
+	return r.ListAllRunsPaged(ctx, limit, before, "")
+}
+
+// ListAllRunsPaged 用复合游标做 keyset 分页（#10）：before 非零时
+// WHERE (created_at, run_id) < ($1, $2)，带 run_id tie-breaker，游标为**全精度** created_at
+// + 上一页末项 run_id。杜绝页边界同时刻（或同一毫秒）多 run 被静默丢弃。
+// ORDER BY created_at DESC, run_id DESC 与游标复合序严格一致。
+func (r *pgRunRepo) ListAllRunsPaged(ctx context.Context, limit int, before time.Time, beforeKey string) ([]Run, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	var rows pgx.Rows
+	var err error
+	if before.IsZero() {
+		rows, err = r.pool.Query(ctx,
+			`SELECT `+runColumns+` FROM runs ORDER BY created_at DESC, run_id DESC LIMIT $1`, limit)
+	} else {
+		rows, err = r.pool.Query(ctx,
+			`SELECT `+runColumns+` FROM runs
+			  WHERE (created_at, run_id) < ($1, $2)
+			  ORDER BY created_at DESC, run_id DESC LIMIT $3`,
+			before, beforeKey, limit)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: list all runs: %w", err)
+	}
+	defer rows.Close()
+	out := []Run{}
+	for rows.Next() {
+		run, err := scanRun(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: scan run: %w", err)
+		}
+		out = append(out, run)
+	}
+	return out, rows.Err()
 }

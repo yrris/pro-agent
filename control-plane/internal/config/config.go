@@ -4,6 +4,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -26,6 +27,20 @@ type Config struct {
 	// UX-1 知识库管理（Files 面板）：Go 直连 Qdrant REST 做纯管理读/删。
 	QdrantURL        string
 	QdrantCollection string
+
+	// OTel 分布式追踪（docs/18，config-gated，默认关；关时零行为变化/零开销）。
+	OTelEnabled     bool   // OTEL_ENABLED 为真（1/true/yes/on，大小写不敏感）才建 provider + 挂 gRPC stats handler
+	OTelEndpoint    string // OTLP/gRPC 导出端点（直连 Tempo；可带 scheme）
+	OTelServiceName string // resource service.name（trace 里的服务标识）
+
+	// D3 多用户 + RBAC（docs/17，默认关；关时 X-User-Id 老路径原样工作，既有测试零回归）。
+	AuthRequired           bool   // AUTH_REQUIRED 为真（1/true/yes/on，大小写不敏感）：受保护 API 无有效 token → 401
+	BootstrapAdminUser     string // BOOTSTRAP_ADMIN_USER：启动时若不存在则建 role=admin
+	BootstrapAdminPassword string // BOOTSTRAP_ADMIN_PASSWORD：引导管理员的初始密码
+
+	// D2 Proactive 连接器（docs/16，默认关；关时零行为变化）。
+	SecretMasterKey string // SECRET_MASTER_KEY：AES-GCM 主密钥（32 字节 base64）。空 → 连接器端点 503、poller 不起
+	PollerEnabled   bool   // POLLER_ENABLED 为真（1/true/yes/on，大小写不敏感）：起独立轮询 goroutine（且须 SecretMasterKey 非空）
 }
 
 func Load() Config {
@@ -47,6 +62,18 @@ func Load() Config {
 		// 也可用 QDRANT_URL 单独覆盖。
 		QdrantURL:        env("QDRANT_URL", env("COGNITION_QDRANT_URL", "http://localhost:6333")),
 		QdrantCollection: env("QDRANT_COLLECTION", env("COGNITION_QDRANT_COLLECTION", "cognition_docs")),
+		// OTel：默认关。端点默认 localhost:4317（compose 内经 OTEL_EXPORTER_OTLP_ENDPOINT
+		// 指向 tempo:4317）；service.name 用于在 Tempo 里区分控制面与认知面两条 span。
+		OTelEnabled:     EnvBool("OTEL_ENABLED"),
+		OTelEndpoint:    env("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317"),
+		OTelServiceName: env("OTEL_SERVICE_NAME", "my-agent-control-plane"),
+		// D3：默认关。引导管理员用于首次拉起 admin 账号（BOOTSTRAP_ADMIN_USER 空则不引导）。
+		AuthRequired:           EnvBool("AUTH_REQUIRED"),
+		BootstrapAdminUser:     env("BOOTSTRAP_ADMIN_USER", ""),
+		BootstrapAdminPassword: env("BOOTSTRAP_ADMIN_PASSWORD", ""),
+		// D2 连接器：默认关。SECRET_MASTER_KEY 空则连接器功能整体降级（端点 503、poller 不起）。
+		SecretMasterKey: env("SECRET_MASTER_KEY", ""),
+		PollerEnabled:   EnvBool("POLLER_ENABLED"),
 	}
 }
 
@@ -64,4 +91,21 @@ func envInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// EnvBool 解析布尔型开关环境变量：1/true/yes/on（大小写不敏感、去首尾空白）为真，
+// 其余一律为假（含未设置/空/0/false/no/off）。
+//
+// 为什么不只认精确 "true"：项目所有对外文档与 compose/.env 一律用 `X=1` 作启用值
+// （AUTH_REQUIRED=1、OTEL_ENABLED=1、POLLER_ENABLED=1），而认知面 pydantic 对同名 env
+// 把 "1"/"yes"/"on" 均解析为 True。若 Go 侧只比精确 "true"，运维按文档设 =1 会静默不生效，
+// 形成"照文档配置却红线失效"的部署陷阱（AUTH_REQUIRED 尤其危险：受保护 API 悄悄退回
+// 可被 X-User-Id 冒充的老语义）。此处放宽到与 pydantic 一致的真值集，Go/Python 取值统一。
+func EnvBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }

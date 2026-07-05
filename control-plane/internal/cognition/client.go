@@ -6,10 +6,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/stats"
 
 	"my-agent/control-plane/internal/event"
 	agentv1 "my-agent/control-plane/internal/genproto/agent/v1"
@@ -69,7 +72,20 @@ type grpcClient struct {
 
 // Dial 连接认知面（明文，内网服务）。
 func Dial(addr string) (Client, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	// OTel 跨面传播（docs/18 §3.1，config-gated）：仅 OTEL_ENABLED 时挂 stats handler，
+	// 自动把 W3C traceparent 写进 outgoing metadata（server-streaming 用 stats-handler
+	// 比 StreamInterceptor 干净）。就地读 env 对齐既有「横切开关就地读」先例（见 metrics.go）。
+	if os.Getenv("OTEL_ENABLED") == "true" {
+		// 过滤周期性 gRPC 健康探测（#8）：/healthz 每 10s 触发一次 grpc.health.v1.Health/Check，
+		// 它跑在任何 run 上下文之外，若照建 span 会每 10s 生成一个孤儿 root span 淹没 Tempo、
+		// 埋掉真正的 agent.run trace。WithFilter 返回 false → 该 RPC 不建 span（span 根本不创建，
+		// 比事后采样丢弃更省）。业务 Run RPC 不受影响。
+		opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler(
+			otelgrpc.WithFilter(healthCheckSpanFilter),
+		)))
+	}
+	conn, err := grpc.NewClient(addr, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cognition: dial %s: %w", addr, err)
 	}
@@ -79,6 +95,12 @@ func Dial(addr string) (Client, error) {
 // NewClient 基于已有连接构造客户端（用于依赖注入/测试，如 bufconn）。
 func NewClient(cc grpc.ClientConnInterface) Client {
 	return &grpcClient{cc: cc, svc: agentv1.NewCognitionServiceClient(cc)}
+}
+
+// healthCheckSpanFilter 是 otelgrpc stats handler 的建 span 谓词（返回 true=建 span）：
+// 滤掉周期性健康探测 grpc.health.v1.Health/Check（#8），其余 RPC（业务 Run 等）照建。
+func healthCheckSpanFilter(info *stats.RPCTagInfo) bool {
+	return info.FullMethodName != grpc_health_v1.Health_Check_FullMethodName
 }
 
 func (c *grpcClient) HealthCheck(ctx context.Context) error {

@@ -19,11 +19,13 @@ import (
 
 	"my-agent/control-plane/internal/artifact"
 	"my-agent/control-plane/internal/cognition"
+	"my-agent/control-plane/internal/config"
 	"my-agent/control-plane/internal/dispatch"
 	"my-agent/control-plane/internal/event"
 	"my-agent/control-plane/internal/health"
 	"my-agent/control-plane/internal/kb"
 	"my-agent/control-plane/internal/metrics"
+	"my-agent/control-plane/internal/secret"
 	"my-agent/control-plane/internal/store"
 )
 
@@ -39,19 +41,38 @@ type handlers struct {
 	stats          store.StatsRepository
 	artifactList   store.ArtifactListRepository
 	schedules      store.SchedulesRepository
+	users          store.UserRepository         // D3：账号（注册/登录/admin 列表）；nil → /auth·/admin 降级
+	authTokens     store.SessionTokenRepository // D3：server 端 token；nil → resolveIdentity 直接回退 X-User-Id
+	authRequired   bool                         // D3：AUTH_REQUIRED；true 时受保护 API 无有效 token → 401
+	connectors     store.ConnectorRepository    // D2 连接器；nil 或 secretKey 空 → /connectors·/triggers 降级 503
+	triggers       store.TriggerRepository      // D2 触发规则
+	secretKey      []byte                       // D2：SECRET_MASTER_KEY 解码后的 AES-GCM 主密钥；空 → 连接器功能降级
 	runTimeout     time.Duration
 	maxUploadBytes int64
 	log            *slog.Logger
+	mux            *chi.Mux // 本路由自身引用；resolveIdentity 反向白名单用它判定「是否已注册的 API 路由」
 }
 
 // NewRouter 装配路由与中间件。artifacts 可为 nil（仅 /artifacts 不可用）；
 // sessions 可为 nil（仅 /sessions 不可用）；healthChecks 可为 nil（/healthz 退化为「进程存活即 200」）；
 // webDir 非空时经 NotFound 托管前端静态资源 + SPA 回退（已注册 API 路由优先匹配，零冲突）。
-func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.SessionRepository, events store.EventRepository, artifacts artifact.Store, healthChecks map[string]health.Check, kbStore kb.Store, cog cognition.Client, stats store.StatsRepository, artifactList store.ArtifactListRepository, schedules store.SchedulesRepository, runTimeout time.Duration, webDir string, log *slog.Logger) http.Handler {
+// D3（docs/17）：新增 users/authTokens 两个 repo 参数——测试传 nil 则 /auth 端点 503 降级、
+// resolveIdentity 直接回退 X-User-Id（既有测试零回归）。AUTH_REQUIRED 从 env 读取（同 MAX_UPLOAD_BYTES）。
+// D2（docs/16）：新增 connectors/triggers 两个 repo 参数——测试传 nil 则 /connectors·/triggers 端点 503。
+// SECRET_MASTER_KEY 从 env 读取（同上就地读横切开关先例）：空或非法则 secretKey 为空，
+// 连接器功能整体降级 503（PAT 无从加密），既有测试零回归。
+func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.SessionRepository, events store.EventRepository, artifacts artifact.Store, healthChecks map[string]health.Check, kbStore kb.Store, cog cognition.Client, stats store.StatsRepository, artifactList store.ArtifactListRepository, schedules store.SchedulesRepository, users store.UserRepository, authTokens store.SessionTokenRepository, connectors store.ConnectorRepository, triggers store.TriggerRepository, runTimeout time.Duration, webDir string, log *slog.Logger) http.Handler {
 	h := &handlers{
 		dispatcher: d, runs: runs, sessions: sessions, events: events, artifacts: artifacts,
-		healthChecks: healthChecks, kb: kbStore, cog: cog, stats: stats, artifactList: artifactList, schedules: schedules, runTimeout: runTimeout,
+		healthChecks: healthChecks, kb: kbStore, cog: cog, stats: stats, artifactList: artifactList, schedules: schedules,
+		users: users, authTokens: authTokens, authRequired: config.EnvBool("AUTH_REQUIRED"),
+		connectors: connectors, triggers: triggers, runTimeout: runTimeout,
 		maxUploadBytes: DefaultMaxUploadBytes, log: log,
+	}
+	if key, err := secret.DecodeMasterKey(os.Getenv("SECRET_MASTER_KEY")); err == nil {
+		h.secretKey = key // 空/合法 → key（nil 或 32 字节）；非法（长度错/坏 base64）→ 保持 nil（降级）
+	} else if log != nil {
+		log.Warn("SECRET_MASTER_KEY invalid; connectors disabled", "err", err)
 	}
 	if v := os.Getenv("MAX_UPLOAD_BYTES"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
@@ -59,6 +80,7 @@ func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.
 		}
 	}
 	r := chi.NewRouter()
+	h.mux = r // 供 resolveIdentity 反向白名单在请求时查路由树（构建完成后只读，并发安全）
 	r.Use(middleware.RequestID)
 	// 请求指标中间件挂在 Recoverer 外层：handler panic 时内层 Recoverer 写的 500 经
 	// 指标中间件的 WrapResponseWriter 记为 status="500"——若挂内层，panic 会穿过计数
@@ -66,6 +88,10 @@ func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.
 	// docs/11 §3.3 红线不变：内部用 chi WrapResponseWriter 透传 Flusher，SSE 不受影响。
 	r.Use(metrics.HTTPMiddleware)
 	r.Use(middleware.Recoverer)
+	// D3 身份解析（docs/17 §3.2）：读 Bearer token → context 存 (userID,role)；挂在
+	// metrics/Recoverer 之后，故其 401 也被指标计数、panic 也被兜住。AUTH_REQUIRED 默认关时
+	// 无 token 静默放行（ownerOf 回退 X-User-Id）——既有链路零行为变化。
+	r.Use(h.resolveIdentity)
 	r.Get("/healthz", h.healthz)
 	r.Handle("/metrics", metrics.Handler()) // 与 /healthz 同级：只读、无副作用（docs/11 §3.1）
 	r.Post("/runs", h.startRun)
@@ -86,8 +112,31 @@ func NewRouter(d *dispatch.Dispatcher, runs store.RunRepository, sessions store.
 	r.Post("/schedules", h.createSchedule)
 	r.Delete("/schedules/{scheduleID}", h.deleteSchedule)
 	r.Post("/schedules/{scheduleID}/toggle", h.toggleSchedule)
+	// D2 Proactive 连接器（docs/16）：owner 域 CRUD；轮询由 internal/poller。
+	// nil 仓库或 SECRET_MASTER_KEY 空 → 全部 503 降级（h.connectorsReady/triggersReady）。
+	r.Get("/connectors", h.listConnectors)
+	r.Post("/connectors", h.createConnector)
+	r.Delete("/connectors/{connectorID}", h.deleteConnector)
+	r.Post("/connectors/{connectorID}/toggle", h.toggleConnector)
+	r.Get("/triggers", h.listTriggers)
+	r.Post("/triggers", h.createTrigger)
+	r.Delete("/triggers/{triggerID}", h.deleteTrigger)
+	r.Post("/triggers/{triggerID}/toggle", h.toggleTrigger)
 	r.Get("/artifacts", h.listArtifacts) // 跨会话产物画廊（owner 域）——与下面的对象代理精确路由共存
 	r.Get("/artifacts/*", h.artifact)
+	// D3 鉴权端点（docs/17 §3.3）：注册/登录/登出/我是谁。AUTH_REQUIRED 下 /auth/* 免 token。
+	r.Post("/auth/register", h.register)
+	r.Post("/auth/login", h.login)
+	r.Post("/auth/logout", h.logout)
+	r.Get("/auth/me", h.me)
+	// D3 管理后台：requireAdmin 门控（role!=admin → 403）；跨 owner 读用 store 新方法。
+	r.Group(func(ar chi.Router) {
+		ar.Use(h.requireAdmin)
+		ar.Get("/admin/users", h.adminListUsers)
+		ar.Patch("/admin/users/{id}/role", h.adminSetRole)
+		ar.Get("/admin/runs", h.adminListRuns)
+		ar.Get("/admin/stats", h.adminStats)
+	})
 	if webDir != "" {
 		r.NotFound(spaHandler(webDir))
 	}
@@ -551,8 +600,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// ownerOf 解析调用方身份（本阶段单用户：X-User-Id 头，缺省 anonymous）。多租户/RBAC 留待拓展。
+// ownerOf 解析调用方身份（docs/17 §3.2 身份解析单点）：**先读 resolveIdentity 放进
+// context 的 token 身份**，没有再回退 X-User-Id 头（默认 anonymous）。全控制面唯一身份解析点，
+// 20 处调用零改——AUTH_REQUIRED 默认关时 token 缺失即走老路径（X-User-Id），既有测试零回归。
 func ownerOf(r *http.Request) string {
+	if id, ok := identityFrom(r); ok && id.userID != "" {
+		return id.userID
+	}
 	if v := r.Header.Get("X-User-Id"); v != "" {
 		return v
 	}
