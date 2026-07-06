@@ -4,11 +4,32 @@
 
 **一个生产形态的多智能体应用平台 · Go 控制面 + Python(LangGraph) 认知面**
 
-把"被动问答的聊天机器人"升级为"可编排、可观测、可回放、可主动触发的复杂任务执行系统"。
+<!-- <p align="center">
+  <a href="https://github.com/yrris/pro-agent/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/yrris/pro-agent?style=flat&logo=github"></a>
+  <a href="https://github.com/yrris/pro-agent/forks"><img alt="Forks" src="https://img.shields.io/github/forks/yrris/pro-agent?style=flat&logo=github"></a>
+  <a href="https://github.com/yrris/pro-agent/commits/main"><img alt="Last Commit" src="https://img.shields.io/github/last-commit/yrris/pro-agent?style=flat&logo=github"></a>
+  <a href="https://github.com/yrris/pro-agent/issues"><img alt="Issues" src="https://img.shields.io/github/issues/yrris/pro-agent?style=flat&logo=github"></a>
+</p> -->
+
+<p align="center">
+  <img alt="Go" src="https://img.shields.io/badge/Go-control-00ADD8?logo=go">
+  <img alt="Python" src="https://img.shields.io/badge/Python-cognition-3776AB?logo=python">
+  <img alt="LangGraph" src="https://img.shields.io/badge/LangGraph-agent--orchestration-1C3C3C?logo=langgraph">
+  <img alt="React" src="https://img.shields.io/badge/React-frontend-61DAFB?logo=react">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-web-3178C6?logo=typescript">
+  <img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?logo=docker">
+  <img alt="Prometheus" src="https://img.shields.io/badge/Prometheus-metrics-E6522C?logo=prometheus">
+  <img alt="OpenTelemetry" src="https://img.shields.io/badge/OpenTelemetry-tracing-000000?logo=opentelemetry&logoColor=white">
+</p>
+
+[![zread](https://img.shields.io/badge/Ask_Zread-_.svg?style=for-the-badge&color=00b0aa&labelColor=000000&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTQuOTYxNTYgMS42MDAxSDIuMjQxNTZDMS44ODgxIDEuNjAwMSAxLjYwMTU2IDEuODg2NjQgMS42MDE1NiAyLjI0MDFWNC45NjAxQzEuNjAxNTYgNS4zMTM1NiAxLjg4ODEgNS42MDAxIDIuMjQxNTYgNS42MDAxSDQuOTYxNTZDNS4zMTUwMiA1LjYwMDEgNS42MDE1NiA1LjMxMzU2IDUuNjAxNTYgNC45NjAxVjIuMjQwMUM1LjYwMTU2IDEuODg2NjQgNS4zMTUwMiAxLjYwMDEgNC45NjE1NiAxLjYwMDFaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik00Ljk2MTU2IDEwLjM5OTlIMi4yNDE1NkMxLjg4ODEgMTAuMzk5OSAxLjYwMTU2IDEwLjY4NjQgMS42MDE1NiAxMS4wMzk5VjEzLjc1OTlDMS42MDE1NiAxNC4xMTM0IDEuODg4MSAxNC4zOTk5IDIuMjQxNTYgMTQuMzk5OUg0Ljk2MTU2QzUuMzE1MDIgMTQuMzk5OSA1LjYwMTU2IDE0LjExMzQgNS42MDE1NiAxMy43NTk5VjExLjAzOTlDNS42MDE1NiAxMC42ODY0IDUuMzE1MDIgMTAuMzk5OSA0Ljk2MTU2IDEwLjM5OTlaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik0xMy43NTg0IDEuNjAwMUgxMS4wMzg0QzEwLjY4NSAxLjYwMDEgMTAuMzk4NCAxLjg4NjY0IDEwLjM5ODQgMi4yNDAxVjQuOTYwMUMxMC4zOTg0IDUuMzEzNTYgMTAuNjg1IDUuNjAwMSAxMS4wMzg0IDUuNjAwMUgxMy43NTg0QzE0LjExMTkgNS42MDAxIDE0LjM5ODQgNS4zMTM1NiAxNC4zOTg0IDQuOTYwMVYyLjI0MDFDMTQuMzk4NCAxLjg4NjY0IDE0LjExMTkgMS42MDAxIDEzLjc1ODQgMS42MDAxWiIgZmlsbD0iI2ZmZiIvPgo8cGF0aCBkPSJNNCAxMkwxMiA0TDQgMTJaIiBmaWxsPSIjZmZmIi8%2BCjxwYXRoIGQ9Ik00IDEyTDEyIDQiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4K&logoColor=ffffff)](https://zread.ai/yrris/pro-agent)
+
+把"被动问答的AI应用"升级为"可编排、可观测、可回放、可主动触发的复杂任务执行系统"。
 
 </div>
 
 > 截图占位（待补充）：`docs/assets/hero.png` —— 首页对话流式 + 计划视图 + 产物工作区整体观感。
+>
 > <!-- ![整体界面](docs/assets/hero.png) -->
 
 ---
@@ -33,16 +54,16 @@
 
 普通的"大模型套壳"应用停留在一问一答：模型答完即忘、多步任务靠用户手动拆解、工具能力硬编码、出了问题无从复盘、只能等用户主动来问。本平台针对这些痛点做了系统性设计：
 
-| 痛点 | 本平台的解法 |
-|---|---|
-| 复杂任务要用户自己拆步骤 | **ReAct + Plan-Execute 双编排**：模型自己规划、并行执行子任务、按结果动态 replan |
-| 模型答完就忘、换个会话失忆 | **LangGraph checkpoint 记忆** + 服务端会话账本，多轮续聊、跨设备一致、可从任意历史轮**分叉出平行时间线** |
-| 加一个新能力就要改代码重部署 | **统一工具生态**：本地工具 / MCP 三传输 / Skill 渐进式披露，加能力=加配置/加文件 |
-| 知识问答召回差、只能纯文本 | **Agentic RAG**：dense+sparse 混合检索 + 多轮反思 + rerank；附件自动入库（含图片/扫描 PDF 的 vision OCR、表格/多栏还原） |
-| 高并发下容易雪崩 | **Go 控制面承载并发与背压**：goroutine + 信号量 + context 取消 + 网关限流，"优雅繁忙"替代雪崩 |
-| 出问题无法复盘、体验无法恢复 | **执行事实账本 + 回放同构**：每一步落库，历史回放与实时流逐帧一致 |
-| 只能被动等用户提问 | **Proactive 连接器**：外部事件（GitHub 等）自动触发 agent，高危动作走人工审批闸 |
-| 生产环境看不见、管不了 | **Prometheus 指标 + OTel 链路追踪 + Grafana 看板 + 多用户 RBAC + 管理后台** |
+| 痛点                         | 本平台的解法                                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 复杂任务要用户自己拆步骤     | **ReAct + Plan-Execute 双编排**：模型自己规划、并行执行子任务、按结果动态 replan                                         |
+| 模型答完就忘、换个会话失忆   | **LangGraph checkpoint 记忆** + 服务端会话账本，多轮续聊、跨设备一致、可从任意历史轮**分叉出平行时间线**                 |
+| 加一个新能力就要改代码重部署 | **统一工具生态**：本地工具 / MCP 三传输 / Skill 渐进式披露，加能力=加配置/加文件                                         |
+| 知识问答召回差、只能纯文本   | **Agentic RAG**：dense+sparse 混合检索 + 多轮反思 + rerank；附件自动入库（含图片/扫描 PDF 的 vision OCR、表格/多栏还原） |
+| 高并发下容易雪崩             | **Go 控制面承载并发与背压**：goroutine + 信号量 + context 取消 + 网关限流，"优雅繁忙"替代雪崩                            |
+| 出问题无法复盘、体验无法恢复 | **执行事实账本 + 回放同构**：每一步落库，历史回放与实时流逐帧一致                                                        |
+| 只能被动等用户提问           | **Proactive 连接器**：外部事件（GitHub 等）自动触发 agent，高危动作走人工审批闸                                          |
+| 生产环境看不见、管不了       | **Prometheus 指标 + OTel 链路追踪 + Grafana 看板 + 多用户 RBAC + 管理后台**                                              |
 
 ---
 
@@ -198,19 +219,20 @@ flowchart TB
 
 ## 能力全景
 
-> 完整触发方式与示例见 `docs/09-能力地图与使用手册.md`。
-
 ### 编排与执行
+
 - **三档推理模式**：快速（ReAct）/ 深度思考（Plan-Execute + 并行子任务）/ 深度研究（多轮检索-验证-引用）。
 - **动态 replan**：规划器根据子任务结果决定继续、重规划或收尾。
 - **可恢复执行**：每步 checkpoint，长任务可中断续跑。
 
 ### 工具与产物
+
 - **统一工具生态**：本地工具 / MCP（stdio·sse·streamable_http 三传输，预热+缓存+串行）/ Skill（SKILL.md 渐进式披露 + 沙箱脚本运行器）。
 - **产物登记与复用**：工具产物落对象存储、按 run/tool_call 归属、跨工具复用；跨会话产物画廊（游标分页）。
 - **生产技能**：数据分析（DuckDB）/ 图表 / PPT / 网页设计 / 图像风格库 / GitHub 深度调研。
 
 ### 知识与记忆
+
 - **Agentic RAG**：Qdrant dense+sparse 混合检索（RRF 融合）+ 多轮反思 + rerank + 带引用生成。
 - **用户知识库闭环**：附件上传 → 自动入库 → 引用回答 → 面板管理（删除只影响此后检索）。
 - **更强文档解析**：文本/docx/xlsx/PDF；**图片与扫描 PDF 逐页 vision OCR**；**PDF 表格 → markdown、多栏阅读顺序还原、公式整页兜底**。
@@ -218,15 +240,18 @@ flowchart TB
 - **会话分叉 / 时间旅行**：从任意历史轮分叉出平行会话，继承分叉点之前的记忆、独立演化。
 
 ### 多模态与生成
+
 - **多模态输入**：图片（vision 门控）、表格文件引用。
 - **生图工作区**：文生图 / 图生图 / **inpaint 局部重绘（画布蒙版 + `/images/edits` mask）** / 生成图内联进网页。
 
 ### 主动与协作
+
 - **HITL 人工审批**：审批=run 边界，挂起-恢复跨双平面一致，决议入账本。
 - **定时触发**：cron 式 schedules，到点自动跑 headless run。
 - **Proactive 连接器**：GitHub PAT 轮询 → 触发规则 → 自动起 agent → 高危动作走审批。
 
 ### 工程化
+
 - **多用户 + RBAC**：密码登录 + 两角色 + 管理后台（用户 / 全部运行 / 系统统计）。
 - **可观测**：Prometheus 指标（并发/背压/时长/tokens/调度）+ OTel 跨面链路追踪 + Grafana 看板 + 成本面板。
 - **健康与背压**：`/healthz` 聚合探活；并发上限下"优雅繁忙"（429）替代雪崩。
@@ -240,7 +265,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    subgraph app["my-agent"]
+    subgraph app["pro-agent"]
         M["/metrics<br/>myagent_ 指标"]
         T["OTel trace<br/>一 run 一根 span 跨面"]
     end
@@ -258,15 +283,22 @@ flowchart LR
 
 ## 技术栈
 
-后端控制面 **Go**（chi · pgx · gRPC）· 认知面 **Python + LangGraph** · LLM **Claude / DeepSeek**（分层路由）· 生图 **gpt-image**（provider 抽象可切换）· 向量库 **Qdrant** · 主库 **PostgreSQL**（业务 + 事件账本 + checkpoint）· 对象存储 **MinIO** · 缓存 **Redis** · 事件 **NATS** · 可观测 **Prometheus + OpenTelemetry + Grafana** · 前端 **React 19 + TypeScript + Vite + Tailwind + shadcn/ui** · 部署 **Docker Compose**。
+| 层 | 技术 |
+| --- | --- |
+| **控制面（Go）** | chi（HTTP 路由）· pgx（PostgreSQL 驱动）· gRPC（跨面流式）· x/sync 信号量（并发准入）· prometheus/client_golang（指标）· OpenTelemetry（链路追踪）· AES-GCM + bcrypt（凭证加密/口令哈希）· minio-go（对象存储客户端） |
+| **认知面（Python）** | LangGraph（图编排 / checkpoint / `Send` 扇出 / interrupt）· LangChain（工具与消息抽象）· grpcio（gRPC 服务）· pydantic-settings（配置）· MCP SDK（三传输工具）· pdfplumber / pypdf / pypdfium2 / Pillow（文档与图像解析）· fastembed（本地 embedding）· DuckDB（数据分析技能）· qdrant-client |
+| **模型** | LLM：**Claude** + **DeepSeek**（按节点分层路由，强模型规划 / 性价比模型执行）· 生图：**gpt-image**（provider 抽象，可切豆包 / 通义万相）· Vision OCR（图片 / 扫描 PDF 转写） |
+| **数据与存储** | **PostgreSQL**（业务 + 事件账本 + LangGraph checkpoint）· **Qdrant**（dense+sparse 混合检索，RRF 融合）· **MinIO**（产物 / 附件对象存储）· **Redis**（缓存）· **NATS**（事件总线） |
+| **可观测** | **Prometheus**（指标）· **OpenTelemetry** + **Tempo**（链路追踪）· **Grafana**（看板） |
+| **前端** | **React 19** · **TypeScript** · **Vite** · **Tailwind CSS v4** · **shadcn/ui** · SSE 流式（原生 fetch 手写解析） |
+| **测试** | Go `testing`（含 `-race`）· pytest（离线契约 + fake 模型）· vitest（纯逻辑）· **Playwright**（浏览器 E2E） |
+| **部署** | **Docker Compose**（一键起全套依赖 + 业务服务单端口托管） |
 
 ---
 
 ## 快速开始
 
 ```bash
-cd my-agent
-
 # 1. 起依赖（PostgreSQL / Qdrant / Redis / MinIO / NATS）
 make infra-up
 
@@ -289,7 +321,7 @@ make stack-up     # → http://localhost:8080
 ## 目录结构
 
 ```
-my-agent/
+pro-agent/
 ├── control-plane/     # Go 控制面（API/调度/并发/流式/账本/连接器/可观测/鉴权）
 ├── cognition/         # Python 认知面（LangGraph 图/工具/技能/RAG/记忆/路由）
 ├── web/               # 前端（React + TS + shadcn/ui）
@@ -303,10 +335,4 @@ my-agent/
 
 已交付：双编排 · 工具生态（本地/MCP/Skill）· Agentic RAG · 记忆与回放 · 会话续聊与分叉 · 多模态与知识库 · 三档模式与生产技能 · 生图工作区（含 inpaint）· HITL 审批 · 定时/事件触发 · 成本面板 · Prometheus + OTel + Grafana 可观测 · 多用户 RBAC 与管理后台 · Playwright E2E。
 
-规划中：数据问答 NL2SQL / TableRAG · Gmail/飞书连接器（OAuth）· 完整 Eval 体系 · 真沙箱（gVisor/microVM）· MinerU 级版式解析。
-
----
-
-<div align="center">
-<sub>用工程的方式做 Agent：不只是"能跑"，而是可编排、可观测、可回放、可协作、可规模化。</sub>
-</div>
+规划中：数据分析 NL2SQL / TableRAG · Gmail/飞书连接器（OAuth）· 完整 Eval 体系 · 真沙箱（gVisor/microVM）· MinerU 级版式解析 · 长期记忆+为用户画像自进化 · 更完善的智能体策略协作、工具组合、模型路由、可观测与管理平台等。
