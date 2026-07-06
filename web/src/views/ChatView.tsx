@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, GitBranch, ImagePlus, Loader2, Paperclip, RotateCw, Square, X } from "lucide-react";
+import { ArrowUp, Check, GitBranch, ImagePlus, Loader2, PanelRight, Paperclip, RotateCw, Square, X } from "lucide-react";
 import { MessageList } from "../components/chat";
 import { FilesPanel } from "../components/FilesPanel";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 // 附件条目：选文件即上传（run body 只带引用），失败可重试。
 interface PendingAttachment {
@@ -385,6 +386,21 @@ export function ChatView({
     () => [...timeline.flatMap((t) => t.state.artifacts), ...(liveArtifacts ?? [])],
     [timeline, liveArtifacts],
   );
+  // 右 dock 的"上传内容(Content)"段：仅本会话上传的附件（timeline 各轮 + 当前 live 轮），按
+  // resourceKey 去重。附件元数据仅当前会话实时轮携带（历史回放轮不含——M8 既有限制，
+  // 载入旧会话时此段为空）。与产物同为"仅本对话"作用域，区别于侧栏"产物"跨会话画廊。
+  const liveAttachments = live?.attachments;
+  const uploads: AttachmentRef[] = useMemo(() => {
+    const seen = new Set<string>();
+    const out: AttachmentRef[] = [];
+    for (const a of [...timeline.flatMap((t) => t.attachments ?? []), ...(liveAttachments ?? [])]) {
+      if (a.resourceKey && !seen.has(a.resourceKey)) {
+        seen.add(a.resourceKey);
+        out.push(a);
+      }
+    }
+    return out;
+  }, [timeline, liveAttachments]);
 
   // 当前 run 产出新产物 → 自动展开 Files 面板。跟踪 live 轮产物数（而非聚合）：
   // 覆盖"产物随终帧 flush 与 status=done 同批到达"的情形（此时聚合+status 守卫会漏），
@@ -429,9 +445,34 @@ export function ChatView({
       ? "运行中…完成后可继续提问"
       : "输入问题，Enter 发送，Shift+Enter 换行（历史会话可直接继续对话）";
 
+  const dockCount = artifacts.length + uploads.length;
   return (
     <div className="flex min-w-0 flex-1">
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        {/* 右上角开关：dock 关闭时可再次打开"本对话 Artifacts 与上传内容"（对齐参考图；仅 lg+，dock 亦仅 lg+）。 */}
+        {!artifactsOpen && (
+          <div className="absolute right-2 top-2 z-10 hidden lg:block">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => onArtifactsOpenChange(true)}
+                  aria-label="打开产物与上传内容"
+                  className="relative size-8 text-stone-400 hover:text-foreground"
+                >
+                  <PanelRight />
+                  {dockCount > 0 && (
+                    <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-medium text-primary-foreground">
+                      {dockCount}
+                    </span>
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>本对话的产物与上传内容</TooltipContent>
+            </Tooltip>
+          </div>
+        )}
         <div ref={scrollRef} className="flex-1 overflow-auto p-4">
           {empty ? (
             <div className="mx-auto mt-24 max-w-md text-center">
@@ -555,7 +596,7 @@ export function ChatView({
             className="hidden w-1 shrink-0 touch-none cursor-col-resize bg-border/40 transition-colors select-none hover:bg-primary/50 lg:block"
           />
           <div style={{ width: artifactsWidth }} className="hidden shrink-0 lg:block">
-            <FilesPanel artifacts={artifacts} onClose={closeArtifacts} />
+            <FilesPanel artifacts={artifacts} uploads={uploads} onClose={closeArtifacts} />
           </div>
         </>
       )}

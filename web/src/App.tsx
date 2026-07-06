@@ -5,7 +5,7 @@ import { useRunStream } from "./hooks/useRunStream";
 import { LoginView } from "./views/LoginView";
 import { ChatView } from "./views/ChatView";
 import { UsageDialog } from "./components/UsageDialog";
-import { Sidebar } from "./components/Sidebar";
+import { Sidebar, SidebarRail } from "./components/Sidebar";
 import { KnowledgePanel } from "./components/FilesPanel";
 import { SchedulesPanel } from "./components/SchedulesPanel";
 import { ConnectorsPanel } from "./components/ConnectorsPanel";
@@ -22,8 +22,6 @@ import {
   type SessionMeta,
 } from "./lib/sessions";
 import { loadUiPrefs, saveUiPrefs, clampArtifactsWidth, type NavView } from "./lib/uiPrefs";
-import { Button } from "@/components/ui/button";
-import { PanelLeft } from "lucide-react";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -230,18 +228,17 @@ export default function App() {
           onLogout={logout}
         />
       ) : (
-        // 侧栏收起时留一个悬浮展开钮（否则无处可开）。
-        <div className="absolute left-2 top-2 z-10">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setSidebarOpen(true)}
-            aria-label="展开侧边栏"
-            className="size-8 text-stone-400 hover:text-foreground"
-          >
-            <PanelLeft />
-          </Button>
-        </div>
+        // 侧栏收起时收敛为窄图标条（保留完整导航的图标形态，对齐 Claude；不再是单个悬浮钮）。
+        <SidebarRail
+          activeNav={effectiveNav}
+          onNavChange={setActiveNav}
+          onNewSession={onNewSession}
+          onExpand={() => setSidebarOpen(true)}
+          health={health}
+          isAdmin={isAdmin}
+          onOpenUsage={() => setUsageOpen(true)}
+          onLogout={logout}
+        />
       )}
       <div className="flex min-h-0 flex-1 flex-col">
         {/* ChatView 常挂载（保住流式 DOM/滚动位置），非 chat 视图用 hidden 盖住 */}

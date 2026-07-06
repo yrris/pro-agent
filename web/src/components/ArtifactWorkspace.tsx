@@ -160,6 +160,44 @@ function FilePreview({ art, text }: { art: ArtifactRef; text: string | null }) {
   );
 }
 
+// 单项预览（名称/大小 + 复制/下载 + 内联预览）。抽出供 dock 两段索引与画廊单项复用。
+export function ArtifactPreview({ art }: { art: ArtifactRef }) {
+  const [copied, setCopied] = useState(false);
+  const mime = art.mimeType || "";
+  const name = art.fileName || art.name;
+  const textLike = !art.missing && isTextLike(mime, name);
+  const text = useArtifactText(textLike ? `/artifacts/${art.resourceKey}` : "", textLike);
+  const copy = async () => {
+    if (text == null) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("复制失败");
+    }
+  };
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center gap-2 border-b px-3 py-1.5 text-xs text-stone-500">
+        <span className="min-w-0 flex-1 truncate">{name}</span>
+        <span className="shrink-0">{human(art.size)}</span>
+        {textLike && (
+          <HeaderIcon label={copied ? "已复制" : "复制内容"} onClick={() => void copy()} disabled={text == null}>
+            {copied ? <Check className="text-emerald-400" /> : <Copy />}
+          </HeaderIcon>
+        )}
+        <HeaderIcon label="下载" onClick={() => void downloadArtifact(art.resourceKey, name)}>
+          <Download />
+        </HeaderIcon>
+      </div>
+      <div className="min-h-0 flex-1 p-2">
+        <FilePreview art={art} text={textLike ? text : null} />
+      </div>
+    </div>
+  );
+}
+
 function HeaderIcon({
   label,
   onClick,

@@ -21,8 +21,21 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-// 侧栏 = 导航中枢（对齐 Claude 官网）：品牌+折叠 / 新对话 / 导航项(对话·产物·知识库·定时)
+// 侧栏 = 导航中枢（对齐 Claude 官网）：品牌+折叠 / 新对话 / 导航项(对话·生图·产物·知识库·定时·连接器·管理)
 // / 会话列表（仅"对话"视图下）/ 账号底栏（健康·成本·用户·退出）。顶栏已移除。
+// 折叠态 = 窄图标条 SidebarRail（同一 NAV_ITEMS，只留图标+tooltip）——展开与折叠共用一份导航定义。
+
+// 导航项单一事实源：展开态渲染为带文字的行、折叠态渲染为图标钮，避免两处漂移。
+type NavDef = { view: NavView; label: string; icon: React.ReactNode; adminOnly?: boolean };
+const NAV_ITEMS: NavDef[] = [
+  { view: "chat", label: "对话", icon: <MessageSquare className="size-4" /> },
+  { view: "generate", label: "生图", icon: <ImagePlus className="size-4" /> },
+  { view: "artifacts", label: "产物", icon: <FolderOpen className="size-4" /> },
+  { view: "kb", label: "知识库", icon: <Database className="size-4" /> },
+  { view: "schedules", label: "定时任务", icon: <CalendarClock className="size-4" /> },
+  { view: "connectors", label: "连接器", icon: <Plug className="size-4" /> },
+  { view: "admin", label: "管理后台", icon: <Shield className="size-4" />, adminOnly: true },
+];
 
 function NavItem({
   icon,
@@ -45,6 +58,94 @@ function NavItem({
       {icon}
       {label}
     </button>
+  );
+}
+
+// 折叠态图标钮：仅图标 + tooltip（label），active 高亮。
+function RailButton({
+  label,
+  active,
+  onClick,
+  children,
+  "aria-label": ariaLabel,
+}: {
+  label: string;
+  active?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  "aria-label"?: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          onClick={onClick}
+          aria-label={ariaLabel ?? label}
+          className={`flex size-9 items-center justify-center rounded-lg transition-colors ${
+            active ? "bg-accent text-foreground" : "text-stone-400 hover:bg-accent/50 hover:text-foreground"
+          }`}
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="right">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+// 折叠态窄图标条（w-14）：展开钮 / 新对话 / 导航图标 / 账号底栏图标。
+// 修复"折叠后完全没有图标"——折叠不再是单个悬浮钮，而是保留完整导航的图标形态（对齐 Claude）。
+export function SidebarRail({
+  activeNav,
+  onNavChange,
+  onNewSession,
+  onExpand,
+  health,
+  isAdmin,
+  onOpenUsage,
+  onLogout,
+}: {
+  activeNav: NavView;
+  onNavChange: (v: NavView) => void;
+  onNewSession: () => void;
+  onExpand: () => void;
+  health: HealthReport | null;
+  isAdmin: boolean;
+  onOpenUsage: () => void;
+  onLogout: () => void;
+}) {
+  const healthColor = !health ? "bg-stone-500" : health.healthy ? "bg-emerald-500" : "bg-rose-500";
+  return (
+    <aside className="flex w-14 shrink-0 flex-col items-center gap-1 border-r bg-background py-3">
+      <RailButton label="展开侧边栏" onClick={onExpand}>
+        <PanelLeft className="size-4" />
+      </RailButton>
+      <RailButton label="新对话" onClick={onNewSession}>
+        <Plus className="size-4 text-primary" />
+      </RailButton>
+      <div className="my-1 h-px w-6 bg-border" />
+      {NAV_ITEMS.filter((n) => !n.adminOnly || isAdmin).map((n) => (
+        <RailButton key={n.view} label={n.label} active={activeNav === n.view} onClick={() => onNavChange(n.view)}>
+          {n.icon}
+        </RailButton>
+      ))}
+      <div className="mt-auto flex flex-col items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="flex size-9 items-center justify-center" aria-label="健康状态">
+              <span className={`h-2 w-2 rounded-full ${healthColor}`} />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="right">{!health ? "检测中" : health.healthy ? "健康" : "异常"}</TooltipContent>
+        </Tooltip>
+        <RailButton label="用量与成本" onClick={onOpenUsage}>
+          <ChartColumn className="size-4" />
+        </RailButton>
+        <RailButton label="退出" onClick={onLogout}>
+          <LogOut className="size-4" />
+        </RailButton>
+      </div>
+    </aside>
   );
 }
 
@@ -178,16 +279,15 @@ export function Sidebar({
           <Plus className="size-4" />
           新对话
         </Button>
-        <NavItem icon={<MessageSquare className="size-4" />} label="对话" active={activeNav === "chat"} onClick={() => onNavChange("chat")} />
-        <NavItem icon={<ImagePlus className="size-4" />} label="生图" active={activeNav === "generate"} onClick={() => onNavChange("generate")} />
-        <NavItem icon={<FolderOpen className="size-4" />} label="产物" active={activeNav === "artifacts"} onClick={() => onNavChange("artifacts")} />
-        <NavItem icon={<Database className="size-4" />} label="知识库" active={activeNav === "kb"} onClick={() => onNavChange("kb")} />
-        <NavItem icon={<CalendarClock className="size-4" />} label="定时任务" active={activeNav === "schedules"} onClick={() => onNavChange("schedules")} />
-        <NavItem icon={<Plug className="size-4" />} label="连接器" active={activeNav === "connectors"} onClick={() => onNavChange("connectors")} />
-        {/* D3：管理后台入口仅 admin 可见（前端隐藏是 UX，真校验在后端 requireAdmin）。 */}
-        {isAdmin && (
-          <NavItem icon={<Shield className="size-4" />} label="管理后台" active={activeNav === "admin"} onClick={() => onNavChange("admin")} />
-        )}
+        {NAV_ITEMS.filter((n) => !n.adminOnly || isAdmin).map((n) => (
+          <NavItem
+            key={n.view}
+            icon={n.icon}
+            label={n.label}
+            active={activeNav === n.view}
+            onClick={() => onNavChange(n.view)}
+          />
+        ))}
       </div>
 
       {/* 会话列表（仅"对话"视图下显示） */}
