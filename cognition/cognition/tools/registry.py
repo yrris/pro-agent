@@ -46,8 +46,14 @@ def _build_script_runner(settings: Settings):
 
 async def build_tool_suite(
     settings: Settings | None = None,
+    *,
+    rag_model=None,
 ) -> tuple[list[BaseTool], dict[str, str], list[Closer]]:
-    """聚合 local + MCP + Skill 工具，返回 (tools, provider_map, closers)。"""
+    """聚合 local + MCP + Skill 工具，返回 (tools, provider_map, closers)。
+
+    ``rag_model`` 是评测/诊断接缝：传入时让 knowledge_search 内部 RAG 子图复用调用方
+    的模型包装器（统一 temperature、retry、usage 统计）；生产默认 None，行为不变。
+    """
     settings = settings or get_settings()
     tools: list[BaseTool] = list(get_local_tools())
     closers: list[Closer] = []
@@ -70,7 +76,9 @@ async def build_tool_suite(
         from cognition.rag.graph import build_rag_subgraph
         from cognition.tools.knowledge_search import build_knowledge_search_tool
 
-        subgraph = build_rag_subgraph(settings)  # 装配期编译一次（含 store/embedder/rerank 预热）
+        subgraph = build_rag_subgraph(
+            settings, model=rag_model
+        )  # 装配期编译一次（含 store/embedder/rerank 预热）
         tools.append(build_knowledge_search_tool(subgraph, settings))
 
     # —— 图像生成：provider 配置非空才注册（镜像 rag_enabled 门控）——

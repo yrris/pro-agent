@@ -167,3 +167,40 @@ async def test_branch_timeout_raises():
 
     with pytest.raises(asyncio.TimeoutError):
         await run_branch_guarded(sem, 0.01, slow)
+
+
+async def test_branch_guarded_lifecycle_hooks_wrap_actual_slot():
+    sem = asyncio.Semaphore(1)
+    events = []
+
+    async def work():
+        events.append("work")
+        return 7
+
+    async def started():
+        events.append("start")
+
+    async def finished(error):
+        events.append(("finish", error))
+
+    result = await run_branch_guarded(
+        sem, 1.0, work, on_start=started, on_finish=finished
+    )
+    assert result == 7
+    assert events == ["start", "work", ("finish", None)]
+
+
+async def test_branch_guarded_finish_hook_observes_timeout():
+    seen = []
+
+    async def slow():
+        await asyncio.sleep(0.1)
+
+    async def finished(error):
+        seen.append(error)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await run_branch_guarded(
+            asyncio.Semaphore(1), 0.001, slow, on_finish=finished
+        )
+    assert len(seen) == 1 and isinstance(seen[0], asyncio.TimeoutError)

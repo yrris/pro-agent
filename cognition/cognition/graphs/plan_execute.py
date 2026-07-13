@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Annotated, Any, Awaitable, Callable, Optional, Sequence, TypedDict
 
 from langchain_core.callbacks.manager import adispatch_custom_event
@@ -61,6 +62,11 @@ SEP = "<sep>"
 EVENT_PLAN = "plan"
 EVENT_TASK = "task"
 EVENT_RESULT = "result"
+# 评测/trace 可消费的内部事件：在信号量真正获得与释放的位置发出，因此可以区分
+# “LangGraph 已调度分支”与“executor 实际占用并发槽”。EventMapper 未映射这两类事件，
+# 对现有 gRPC/SSE 契约零影响。
+EVENT_BRANCH_START = "orchestration_branch_start"
+EVENT_BRANCH_END = "orchestration_branch_end"
 
 # 状态归约取值。
 STATE_FINISHED = "finished"
@@ -314,10 +320,23 @@ async def run_branch_guarded(
     sem: asyncio.Semaphore,
     timeout: float,
     coro_factory: Callable[[], Awaitable[Any]],
+    *,
+    on_start: Optional[Callable[[], Awaitable[None]]] = None,
+    on_finish: Optional[Callable[[Optional[BaseException]], Awaitable[None]]] = None,
 ) -> Any:
-    """在信号量限宽 + 超时下运行一个分支协程（供 executor 节点与单测复用）。"""
+    """在信号量限宽 + 超时下运行分支，并可观测实际并发槽生命周期。"""
     async with sem:
-        return await asyncio.wait_for(coro_factory(), timeout)
+        if on_start is not None:
+            await on_start()
+        error: Optional[BaseException] = None
+        try:
+            return await asyncio.wait_for(coro_factory(), timeout)
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            if on_finish is not None:
+                await on_finish(error)
 
 
 # ——————————————————————————————————————————————————————————————
@@ -517,9 +536,39 @@ def build_plan_execute_graph(
         }
 
         sem = _semaphore()
+
+        async def branch_start() -> None:
+            await adispatch_custom_event(
+                EVENT_BRANCH_START,
+                {
+                    "request_id": request_id,
+                    "round": rnd,
+                    "branch_id": branch_id,
+                    "task": task,
+                    "perf_counter_ns": time.perf_counter_ns(),
+                },
+            )
+
+        async def branch_end(error: Optional[BaseException]) -> None:
+            await adispatch_custom_event(
+                EVENT_BRANCH_END,
+                {
+                    "request_id": request_id,
+                    "round": rnd,
+                    "branch_id": branch_id,
+                    "task": task,
+                    "perf_counter_ns": time.perf_counter_ns(),
+                    "error_type": type(error).__name__ if error is not None else "",
+                },
+            )
+
         try:
             result_state = await run_branch_guarded(
-                sem, branch_timeout, lambda: executor_graph.ainvoke(sub_state, child_config)
+                sem,
+                branch_timeout,
+                lambda: executor_graph.ainvoke(sub_state, child_config),
+                on_start=branch_start,
+                on_finish=branch_end,
             )
             final_text, observations = _extract_outcome(result_state)
             status = STATE_FINISHED
