@@ -4,7 +4,9 @@ import { toast } from "sonner";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
 import { downloadArtifact } from "../lib/api/client";
 import { getUserId } from "../lib/identity";
+import { isChartArtifact } from "../lib/workspaceFeed";
 import { Markdown } from "./common";
+import { EChartsPreview } from "./workspace/EChartsPreview";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -102,7 +104,15 @@ function useArtifactText(url: string, enabled: boolean) {
   return text;
 }
 
-function FilePreview({ art, text }: { art: ArtifactRef; text: string | null }) {
+function FilePreview({
+  art,
+  text,
+  htmlMode = "preview",
+}: {
+  art: ArtifactRef;
+  text: string | null;
+  htmlMode?: "preview" | "code"; // ArtifactPreview 头部「代码 | 预览」切换驱动
+}) {
   const url = `/artifacts/${art.resourceKey}`;
   const mime = art.mimeType || "";
   const name = art.fileName || art.name;
@@ -110,7 +120,7 @@ function FilePreview({ art, text }: { art: ArtifactRef; text: string | null }) {
   const isPdf = mime === "application/pdf";
   // 带 X-User-Id 的 blob URL（img/pdf 无法在 src 上带头）。
   const objUrl = useAuthedObjectUrl(url, !art.missing && (isImg || isPdf));
-  if (art.missing) return <div className="p-4 text-sm text-stone-500">文件已删除或不可用</div>;
+  if (art.missing) return <div className="p-4 text-sm text-muted-foreground">文件已删除或不可用</div>;
   if (isImg)
     return (
       <div className="flex h-full items-start justify-center p-3">
@@ -129,6 +139,8 @@ function FilePreview({ art, text }: { art: ArtifactRef; text: string | null }) {
         <Skeleton className="h-96 w-full" />
       </div>
     );
+  // ECharts 图表产物：交互渲染优先于 json 文本分支（内部自带懒加载/主题/回退）。
+  if (isChartArtifact({ name, mimeType: mime })) return <EChartsPreview art={art} />;
   if (isTextLike(mime, name)) {
     if (text === null)
       return (
@@ -139,10 +151,17 @@ function FilePreview({ art, text }: { art: ArtifactRef; text: string | null }) {
         </div>
       );
     // 文档级预览美化：markdown 渲染成文档、html 进沙箱 iframe，而不是源码 dump。
-    if (isHtml(mime, name))
-            // allow-scripts：生成的交互网页/图表能跑；srcDoc 保持 opaque origin，
+    if (isHtml(mime, name)) {
+      if (htmlMode === "code")
+        return (
+          <pre className="h-full overflow-auto rounded-lg bg-code-bg p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground/90">
+            {text}
+          </pre>
+        );
+      // allow-scripts：生成的交互网页/图表能跑；srcDoc 保持 opaque origin，
       // 且绝不加 allow-same-origin（同源组合=沙箱逃逸）；内部 fetch 无 X-User-Id 撞 403 墙。
       return <iframe srcDoc={text} title={name} sandbox="allow-scripts" className="h-full w-full rounded-lg bg-white" />;
+    }
     if (isMarkdown(mime, name))
       return (
         <div className="h-full overflow-auto p-4">
@@ -150,22 +169,24 @@ function FilePreview({ art, text }: { art: ArtifactRef; text: string | null }) {
         </div>
       );
     return (
-      <pre className="h-full overflow-auto whitespace-pre-wrap rounded-lg bg-black/25 p-3 text-xs leading-relaxed text-stone-200">
+      <pre className="h-full overflow-auto whitespace-pre-wrap rounded-lg bg-code-bg p-3 text-xs leading-relaxed text-foreground/90">
         {text}
       </pre>
     );
   }
   return (
-    <div className="p-4 text-sm text-stone-400">该类型（{mime || "未知"}）暂不支持内联预览，请下载查看。</div>
+    <div className="p-4 text-sm text-muted-foreground">该类型（{mime || "未知"}）暂不支持内联预览，请下载查看。</div>
   );
 }
 
 // 单项预览（名称/大小 + 复制/下载 + 内联预览）。抽出供 dock 两段索引与画廊单项复用。
 export function ArtifactPreview({ art }: { art: ArtifactRef }) {
   const [copied, setCopied] = useState(false);
+  const [htmlMode, setHtmlMode] = useState<"preview" | "code">("preview");
   const mime = art.mimeType || "";
   const name = art.fileName || art.name;
   const textLike = !art.missing && isTextLike(mime, name);
+  const htmlLike = !art.missing && isHtml(mime, name);
   const text = useArtifactText(textLike ? `/artifacts/${art.resourceKey}` : "", textLike);
   const copy = async () => {
     if (text == null) return;
@@ -179,12 +200,36 @@ export function ArtifactPreview({ art }: { art: ArtifactRef }) {
   };
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-2 border-b px-3 py-1.5 text-xs text-stone-500">
+      <div className="flex items-center gap-2 border-b px-3 py-1.5 text-xs text-muted-foreground">
         <span className="min-w-0 flex-1 truncate">{name}</span>
         <span className="shrink-0">{human(art.size)}</span>
+        {htmlLike && (
+          <div data-testid="html-mode-toggle" className="flex shrink-0 items-center gap-0.5 rounded-md bg-muted p-0.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setHtmlMode("code")}
+              className={`h-5 rounded px-1.5 text-[11px] ${
+                htmlMode === "code" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
+              }`}
+            >
+              代码
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setHtmlMode("preview")}
+              className={`h-5 rounded px-1.5 text-[11px] ${
+                htmlMode === "preview" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
+              }`}
+            >
+              预览
+            </Button>
+          </div>
+        )}
         {textLike && (
           <HeaderIcon label={copied ? "已复制" : "复制内容"} onClick={() => void copy()} disabled={text == null}>
-            {copied ? <Check className="text-emerald-400" /> : <Copy />}
+            {copied ? <Check className="text-success" /> : <Copy />}
           </HeaderIcon>
         )}
         <HeaderIcon label="下载" onClick={() => void downloadArtifact(art.resourceKey, name)}>
@@ -192,7 +237,7 @@ export function ArtifactPreview({ art }: { art: ArtifactRef }) {
         </HeaderIcon>
       </div>
       <div className="min-h-0 flex-1 p-2">
-        <FilePreview art={art} text={textLike ? text : null} />
+        <FilePreview art={art} text={textLike ? text : null} htmlMode={htmlMode} />
       </div>
     </div>
   );
@@ -218,7 +263,7 @@ function HeaderIcon({
           onClick={onClick}
           disabled={disabled}
           aria-label={label}
-          className="size-7 text-stone-400 hover:text-foreground"
+          className="size-7 text-muted-foreground hover:text-foreground"
         >
           {children}
         </Button>
@@ -282,14 +327,14 @@ export const ArtifactWorkspace = memo(function ArtifactWorkspace({
             </SelectContent>
           </Select>
         ) : (
-          <span className="flex-1 px-1 text-sm text-stone-400">产物</span>
+          <span className="flex-1 px-1 text-sm text-muted-foreground">产物</span>
         )}
-        <span className="shrink-0 text-xs text-stone-500">
+        <span className="shrink-0 text-xs text-muted-foreground">
           {artifacts.length > 0 ? `${artifacts.length} 个` : ""}
         </span>
         {current && textLike && (
           <HeaderIcon label={copied ? "已复制" : "复制内容"} onClick={() => void copy()} disabled={text == null}>
-            {copied ? <Check className="text-emerald-400" /> : <Copy />}
+            {copied ? <Check className="text-success" /> : <Copy />}
           </HeaderIcon>
         )}
         {current && (
@@ -307,7 +352,7 @@ export const ArtifactWorkspace = memo(function ArtifactWorkspace({
         )}
       </div>
       {artifacts.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-stone-500">
+        <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">
           运行产出的文件（报告、图表等）
           <br />
           会出现在这里，可预览与下载。
@@ -315,7 +360,7 @@ export const ArtifactWorkspace = memo(function ArtifactWorkspace({
       ) : (
         current && (
           <>
-            <div className="flex items-center gap-2 border-b px-3 py-1.5 text-xs text-stone-500">
+            <div className="flex items-center gap-2 border-b px-3 py-1.5 text-xs text-muted-foreground">
               <span className="min-w-0 flex-1 truncate">{name}</span>
               <span>{human(current.size)}</span>
             </div>

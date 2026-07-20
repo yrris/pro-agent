@@ -23,6 +23,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   // shadcn copy-in 组件用 @/* 引用；与 tsconfig paths 保持一致（vitest 共用本配置）。
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
+  // echarts 只被 EChartsPreview 懒加载：单独分包，主包体积不受影响、图表包可长缓存。
+  build: { rollupOptions: { output: { manualChunks: { echarts: ["echarts"] } } } },
   server: { port: 5173, proxy },
   test: { environment: "node", include: ["src/**/*.test.ts"] },
 });

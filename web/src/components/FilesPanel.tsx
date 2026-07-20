@@ -10,7 +10,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 // 上传附件 → ArtifactRef 形态（复用预览/下载；uploads 也由 /artifacts/* 代理带 owner 校验服务）。
-function uploadToRef(a: AttachmentRef): ArtifactRef {
+// 导出：workspace/FilesTab 复用同一转换。
+export function uploadToRef(a: AttachmentRef): ArtifactRef {
   return {
     resourceKey: a.resourceKey,
     name: a.fileName,
@@ -24,7 +25,8 @@ function uploadToRef(a: AttachmentRef): ArtifactRef {
 }
 
 // dock 卡片：图片显缩略图、其余显类型图标；active 高亮，点击选中预览。
-function FileCard({ art, active, onClick }: { art: ArtifactRef; active: boolean; onClick: () => void }) {
+// 导出：workspace/FilesTab 复用同一列表形态。
+export function FileCard({ art, active, onClick }: { art: ArtifactRef; active: boolean; onClick: () => void }) {
   const isImg = (art.mimeType || "").startsWith("image/");
   const thumb = useAuthedObjectUrl(`/artifacts/${art.resourceKey}`, isImg && !art.missing);
   return (
@@ -35,18 +37,18 @@ function FileCard({ art, active, onClick }: { art: ArtifactRef; active: boolean;
         active ? "border-primary/50 bg-primary/10" : "border-border/60 hover:border-border hover:bg-accent/50"
       }`}
     >
-      <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded bg-black/20">
+      <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded bg-muted">
         {isImg && thumb ? (
           <img src={thumb} alt="" className="size-full object-cover" />
         ) : isImg ? (
-          <ImageIcon className="size-4 text-stone-500" />
+          <ImageIcon className="size-4 text-muted-foreground" />
         ) : (
-          <FileText className="size-4 text-stone-500" />
+          <FileText className="size-4 text-muted-foreground" />
         )}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-xs text-stone-200">{art.fileName || art.name}</span>
-        <span className="block truncate text-[10px] text-stone-500">{(art.mimeType || "文件").split(";")[0]}</span>
+        <span className="block truncate text-xs text-foreground">{art.fileName || art.name}</span>
+        <span className="block truncate text-[10px] text-muted-foreground">{(art.mimeType || "文件").split(";")[0]}</span>
       </span>
     </button>
   );
@@ -121,7 +123,7 @@ export function KnowledgePanel() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-1.5 border-b px-3 py-2">
-        <span className="min-w-0 flex-1 truncate text-xs text-stone-500">
+        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
           个人知识库（跨会话可检索）
         </span>
         <input
@@ -140,7 +142,7 @@ export function KnowledgePanel() {
               disabled={busy}
               onClick={() => fileRef.current?.click()}
               aria-label="上传入库"
-              className="size-7 text-stone-400 hover:text-foreground"
+              className="size-7 text-muted-foreground hover:text-foreground"
             >
               {busy ? <Loader2 className="animate-spin" /> : <Upload />}
             </Button>
@@ -154,7 +156,7 @@ export function KnowledgePanel() {
               size="icon"
               onClick={() => void refresh()}
               aria-label="刷新"
-              className="size-7 text-stone-400 hover:text-foreground"
+              className="size-7 text-muted-foreground hover:text-foreground"
             >
               <RotateCw />
             </Button>
@@ -164,9 +166,9 @@ export function KnowledgePanel() {
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-2">
-          {docs === null && <div className="p-3 text-xs text-stone-500">加载中…</div>}
+          {docs === null && <div className="p-3 text-xs text-muted-foreground">加载中…</div>}
           {docs?.length === 0 && (
-            <div className="p-4 text-center text-xs leading-relaxed text-stone-500">
+            <div className="p-4 text-center text-xs leading-relaxed text-muted-foreground">
               知识库为空。
               <br />
               上传文档，或在对话里发送附件（文本/PDF 自动入库）。
@@ -177,20 +179,20 @@ export function KnowledgePanel() {
               key={d.sourceId}
               className="group mb-1 flex items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-accent/50"
             >
-              <FileText className="size-4 shrink-0 text-stone-500" />
+              <FileText className="size-4 shrink-0 text-muted-foreground" />
               <div className="min-w-0 flex-1">
                 {d.downloadUrl ? (
                   <button
                     onClick={() => void downloadArtifact(d.sourceId, d.fileName)}
                     title="下载原文件"
-                    className="block max-w-full truncate text-left text-sm text-stone-200 hover:text-primary"
+                    className="block max-w-full truncate text-left text-sm text-foreground hover:text-primary"
                   >
                     {d.fileName}
                   </button>
                 ) : (
-                  <div className="truncate text-sm text-stone-200">{d.fileName}</div>
+                  <div className="truncate text-sm text-foreground">{d.fileName}</div>
                 )}
-                <div className="text-[10px] text-stone-500">
+                <div className="text-[10px] text-muted-foreground">
                   {d.chunks} 段{d.createdAt ? ` · ${fmtDate(d.createdAt)}` : ""}
                 </div>
               </div>
@@ -200,7 +202,7 @@ export function KnowledgePanel() {
                 className={`shrink-0 rounded p-1 transition-colors ${
                   confirming === d.sourceId
                     ? "bg-destructive/20 text-destructive"
-                    : "text-stone-500 opacity-0 hover:text-destructive group-hover:opacity-100"
+                    : "text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100"
                 }`}
               >
                 <Trash2 className="size-3.5" />
@@ -209,7 +211,7 @@ export function KnowledgePanel() {
           ))}
         </div>
       </ScrollArea>
-      <div className="border-t p-2 text-[10px] leading-relaxed text-stone-600">
+      <div className="border-t p-2 text-[10px] leading-relaxed text-muted-foreground/70">
         删除只影响此后的检索（含旧会话里再提问）；已生成的历史回答与回放不受影响。
       </div>
     </div>
@@ -247,19 +249,19 @@ export const FilesPanel = memo(function FilesPanel({
   return (
     <div className="flex h-full flex-col border-l bg-background">
       <div className="flex items-center gap-1.5 border-b px-3 py-2">
-        <FileText className="size-3.5 text-stone-400" />
+        <FileText className="size-3.5 text-muted-foreground" />
         <span className="text-sm text-foreground">当前对话{total > 0 ? ` · ${total}` : ""}</span>
         <button
           onClick={onClose}
           aria-label="关闭"
-          className="ml-auto rounded p-1.5 text-stone-400 transition-colors hover:text-foreground"
+          className="ml-auto rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground"
         >
           <X className="size-4" />
         </button>
       </div>
 
       {total === 0 ? (
-        <div className="flex flex-1 items-center justify-center p-6 text-center text-sm leading-relaxed text-stone-500">
+        <div className="flex flex-1 items-center justify-center p-6 text-center text-sm leading-relaxed text-muted-foreground">
           本对话的产物（报告/图表/生成图等）
           <br />
           与上传的文件会出现在这里，可预览下载。
@@ -271,7 +273,7 @@ export const FilesPanel = memo(function FilesPanel({
             <div className="space-y-1 p-2">
               {artifacts.length > 0 && (
                 <>
-                  <div className="px-1 pt-0.5 pb-1 text-[10px] font-medium tracking-wide text-stone-500 uppercase">
+                  <div className="px-1 pt-0.5 pb-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
                     Artifacts · {artifacts.length}
                   </div>
                   {artifacts.map((a) => (
@@ -281,7 +283,7 @@ export const FilesPanel = memo(function FilesPanel({
               )}
               {uploadRefs.length > 0 && (
                 <>
-                  <div className="px-1 pt-1.5 pb-1 text-[10px] font-medium tracking-wide text-stone-500 uppercase">
+                  <div className="px-1 pt-1.5 pb-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
                     上传内容 · {uploadRefs.length}
                   </div>
                   {uploadRefs.map((a) => (
