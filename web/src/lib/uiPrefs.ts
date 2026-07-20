@@ -9,10 +9,13 @@ const KEY = "my-agent.ui";
 export type NavView = "chat" | "generate" | "artifacts" | "kb" | "schedules" | "connectors" | "admin";
 const NAV_VIEWS: NavView[] = ["chat", "generate", "artifacts", "kb", "schedules", "connectors", "admin"];
 
+export type Theme = "light" | "dark";
+
 export interface UiPrefs {
   sidebarOpen: boolean;
   artifactsWidth: number;
   activeNav: NavView;
+  theme: Theme;
 }
 
 export const ARTIFACTS_MIN_W = 320;
@@ -23,7 +26,8 @@ export function clampArtifactsWidth(w: number): number {
   return Math.min(ARTIFACTS_MAX_W, Math.max(ARTIFACTS_MIN_W, Math.round(w)));
 }
 
-const DEFAULTS: UiPrefs = { sidebarOpen: true, artifactsWidth: 384, activeNav: "chat" };
+// 浅色为新默认（对齐 claude.ai 奶油米观感）；历史用户无 theme 键 → 落到 light，一键可切回。
+const DEFAULTS: UiPrefs = { sidebarOpen: true, artifactsWidth: 384, activeNav: "chat", theme: "light" };
 
 export function loadUiPrefs(): UiPrefs {
   try {
@@ -34,6 +38,7 @@ export function loadUiPrefs(): UiPrefs {
       sidebarOpen: typeof parsed.sidebarOpen === "boolean" ? parsed.sidebarOpen : DEFAULTS.sidebarOpen,
       artifactsWidth: clampArtifactsWidth(parsed.artifactsWidth ?? DEFAULTS.artifactsWidth),
       activeNav: NAV_VIEWS.includes(parsed.activeNav as NavView) ? (parsed.activeNav as NavView) : "chat",
+      theme: parsed.theme === "dark" ? "dark" : "light",
     };
   } catch {
     return { ...DEFAULTS };

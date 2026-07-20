@@ -1,22 +1,66 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/lora";
+@import "@fontsource-variable/jetbrains-mono";
+@import "./hljs.css";
 
-/* —— shadcn 设计 token（按 M6 手写配色逐一映射，暗色为唯一主题） ——
-   background/foreground = 原 body 色；primary = 原 cyan-600 按钮；border/input =
-   原 border-white/10；popover 必须不透明（Select/Tooltip 浮层叠在内容上）；
-   radius=0.75rem 对齐原主导圆角 rounded-xl。语义色（emerald/rose/blue/indigo/
-   violet/amber）不 token 化，留在组件里做字面 utilities。 */
+/* 暗色改为 class 策略：html.dark 生效（lib/theme.ts 控制 + index.html 防闪烁脚本）。 */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* —— 双主题设计 token（对齐 claude.ai 观感）——
+   浅色（默认）：奶油米暖底 #faf9f5，卡面近白 #fefdfb，暖发丝线边框；
+   暗色：沿用 UX-1 暖炭黑体系（页面 #1f1e1b < 卡面 #262521 < 浮层 #2e2c27）。
+   珊瑚橙 #d97757 为唯一品牌色；语义色（success/warning/info/plan/mcp）全 token 化，
+   组件里不再写 emerald/rose/blue/indigo/violet 字面色。 */
 :root {
+  color-scheme: light;
+  --background: #faf9f5;
+  --foreground: #1f1e1d;
+  --card: #fefdfb;
+  --card-foreground: #1f1e1d;
+  --popover: #ffffff;
+  --popover-foreground: #3d3a34;
+  --primary: #d97757;              /* Claude 珊瑚橙 */
+  --primary-foreground: #ffffff;
+  --secondary: #f0eee6;
+  --secondary-foreground: #3d3a34;
+  --muted: #f2f0e9;
+  --muted-foreground: #706d64;
+  --accent: #eceae2;
+  --accent-foreground: #1f1e1d;
+  --destructive: #c2453a;
+  --destructive-foreground: #ffffff;
+  --border: rgba(31, 30, 29, 0.1);
+  --input: rgba(31, 30, 29, 0.14);
+  --ring: #d97757;
+  --radius: 0.75rem;
+  /* 语义状态色 */
+  --success: #217a52;
+  --warning: #a16207;
+  --info: #3b6ea5;
+  --plan: #5a5fb8;
+  --mcp: #7c5cbf;
+  /* 代码块/滚动条 */
+  --code-bg: #f4f2ec;
+  --scrollbar-thumb: rgba(31, 30, 29, 0.16);
+  /* 图表分类色板（ECharts claude-light 主题同源） */
+  --chart-1: #d97757;
+  --chart-2: #6a9b8e;
+  --chart-3: #c2a878;
+  --chart-4: #8b7db8;
+  --chart-5: #5f8fb4;
+}
+
+.dark {
   color-scheme: dark;
-  /* UX-1：Claude 官网风暖炭黑体系（参考 tmp/todo/界面设计参考图）。
-     暖灰层次：页面 #1f1e1b < 卡面 #262521 < 浮层 #2e2c27；珊瑚橙 #d97757 为唯一品牌色。 */
   --background: #1f1e1b;
   --foreground: #e8e6e0;
   --card: #262521;
   --card-foreground: #e8e6e0;
   --popover: #2e2c27;
   --popover-foreground: #d6d3cb;
-  --primary: #d97757;              /* Claude 珊瑚橙 */
+  --primary: #d97757;
   --primary-foreground: #ffffff;
   --secondary: rgba(255, 255, 255, 0.06);
   --secondary-foreground: #d6d3cb;
@@ -29,7 +73,18 @@
   --border: rgba(255, 255, 255, 0.09);
   --input: rgba(255, 255, 255, 0.1);
   --ring: #d97757;
-  --radius: 0.75rem;
+  --success: #56b389;
+  --warning: #dfa848;
+  --info: #7ea6d9;
+  --plan: #9a9ee8;
+  --mcp: #b39ddb;
+  --code-bg: rgba(0, 0, 0, 0.35);
+  --scrollbar-thumb: #3d3a34;
+  --chart-1: #e08b6d;
+  --chart-2: #7fb3a5;
+  --chart-3: #d4bd90;
+  --chart-4: #a294cc;
+  --chart-5: #7ba6c9;
 }
 
 @theme inline {
@@ -52,10 +107,25 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-plan: var(--plan);
+  --color-mcp: var(--mcp);
+  --color-code-bg: var(--code-bg);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  /* 字体：Inter（拉丁正文）+ 系统中文；Lora（衬线展示，hero/品牌）+ 宋体中文兜底；JetBrains Mono 代码 */
+  --font-sans: "Inter Variable", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-display: "Lora Variable", "Songti SC", "STSong", "Noto Serif SC", serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 html,
@@ -66,22 +136,28 @@ body,
 }
 
 body {
-  font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: var(--font-sans);
   background: var(--background);
   color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-/* 细腻滚动条 */
+::selection {
+  background: color-mix(in srgb, var(--primary) 25%, transparent);
+}
+
+/* 细腻滚动条（两内核统一走 token，随主题切换） */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #3d3a34 transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #2a3350;
+  background: var(--scrollbar-thumb);
   border-radius: 8px;
 }
 
@@ -92,3 +168,19 @@ body {
 .pulse-dot {
   animation: pulse-dot 1s ease-in-out infinite;
 }
+
+/* 运行中三点指示（错拍呼吸，替代文字前的「●」） */
+.thinking-dots {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+.thinking-dots > span {
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+.thinking-dots > span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots > span:nth-child(3) { animation-delay: 0.4s; }

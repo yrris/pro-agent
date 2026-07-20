@@ -141,14 +141,14 @@ export function ConnectorsPanel({ onOpenSession }: { onOpenSession?: (sessionId:
   return (
     <div className="flex h-full flex-col" data-testid="connectors-panel">
       <div className="flex items-center gap-1.5 border-b px-3 py-2">
-        <span className="min-w-0 flex-1 truncate text-xs text-stone-500">连接器（Proactive · GitHub）</span>
+        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/70">连接器（Proactive · GitHub）</span>
         <Button
           variant="ghost"
           size="icon"
           onClick={() => setCreatingConn((v) => !v)}
           aria-label="新建连接器"
           data-testid="connector-new"
-          className="size-7 text-stone-400 hover:text-foreground"
+          className="size-7 text-muted-foreground hover:text-foreground"
         >
           <Plus />
         </Button>
@@ -157,7 +157,7 @@ export function ConnectorsPanel({ onOpenSession }: { onOpenSession?: (sessionId:
           size="icon"
           onClick={() => void refresh()}
           aria-label="刷新"
-          className="size-7 text-stone-400 hover:text-foreground"
+          className="size-7 text-muted-foreground hover:text-foreground"
         >
           <RotateCw />
         </Button>
@@ -196,7 +196,7 @@ export function ConnectorsPanel({ onOpenSession }: { onOpenSession?: (sessionId:
               {busy ? <Loader2 className="animate-spin" /> : "授权连接"}
             </Button>
           </div>
-          <p className="text-[10px] leading-relaxed text-stone-600">
+          <p className="text-[10px] leading-relaxed text-muted-foreground/60">
             PAT 经 AES-GCM 加密列存，明文绝不落库/日志；仅用于向 GitHub 拉取你的通知。
           </p>
         </div>
@@ -204,15 +204,15 @@ export function ConnectorsPanel({ onOpenSession }: { onOpenSession?: (sessionId:
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-2">
-          {connectors === null && <div className="p-3 text-xs text-stone-500">加载中…</div>}
+          {connectors === null && <div className="p-3 text-xs text-muted-foreground/70">加载中…</div>}
           {disabled && (
-            <div className="p-4 text-center text-xs leading-relaxed text-stone-500">
+            <div className="p-4 text-center text-xs leading-relaxed text-muted-foreground/70">
               连接器功能未启用。
               <br />需在控制面配置 SECRET_MASTER_KEY（32 字节 base64）后重启。
             </div>
           )}
           {connectors?.length === 0 && !disabled && !creatingConn && (
-            <div className="p-4 text-center text-xs leading-relaxed text-stone-500">
+            <div className="p-4 text-center text-xs leading-relaxed text-muted-foreground/70">
               还没有连接器。
               <br />点 + 授权 GitHub PAT：平台会按间隔轮询你的通知，命中规则自动起 run。
             </div>
@@ -227,15 +227,15 @@ export function ConnectorsPanel({ onOpenSession }: { onOpenSession?: (sessionId:
                 className="group mb-2 rounded-lg border border-border/60 p-2"
               >
                 <div className="flex items-center gap-2">
-                  <Plug className={`size-4 shrink-0 ${c.enabled ? "text-primary" : "text-stone-600"}`} />
-                  <span className="min-w-0 flex-1 truncate text-sm text-stone-200">
+                  <Plug className={`size-4 shrink-0 ${c.enabled ? "text-primary" : "text-muted-foreground/60"}`} />
+                  <span className="min-w-0 flex-1 truncate text-sm text-foreground">
                     github · {pollIntervalLabel(c.pollIntervalS)}
                   </span>
                   <button
                     onClick={() =>
                       void toggleConnector(c.connectorId, !c.enabled).then(refresh).catch(() => toast.error("更新失败"))
                     }
-                    className="shrink-0 text-[10px] text-stone-500 hover:text-foreground"
+                    className="shrink-0 text-[10px] text-muted-foreground/70 hover:text-foreground"
                   >
                     {c.enabled ? "轮询中（暂停）" : "已暂停（启用）"}
                   </button>
@@ -245,7 +245,7 @@ export function ConnectorsPanel({ onOpenSession }: { onOpenSession?: (sessionId:
                     className={`shrink-0 rounded p-1 transition-colors ${
                       confirming === c.connectorId
                         ? "bg-destructive/20 text-destructive"
-                        : "text-stone-500 opacity-0 hover:text-destructive group-hover:opacity-100"
+                        : "text-muted-foreground/70 opacity-0 hover:text-destructive group-hover:opacity-100"
                     }`}
                   >
                     <Trash2 className="size-3.5" />
@@ -256,24 +256,24 @@ export function ConnectorsPanel({ onOpenSession }: { onOpenSession?: (sessionId:
                 <div className="mt-1.5 space-y-1 pl-6">
                   {trigs.map((t) => (
                     <div key={t.triggerId} data-testid="trigger-row" className="flex items-center gap-2 text-[11px]">
-                      <Zap className={`size-3 shrink-0 ${t.enabled ? "text-amber-500" : "text-stone-600"}`} />
-                      <span className="shrink-0 rounded bg-accent/60 px-1 text-stone-300">{eventTypeLabel(t.eventType)}</span>
-                      {t.filter?.repo && <span className="shrink-0 text-stone-500">{t.filter.repo}</span>}
+                      <Zap className={`size-3 shrink-0 ${t.enabled ? "text-warning" : "text-muted-foreground/60"}`} />
+                      <span className="shrink-0 rounded bg-accent/60 px-1 text-foreground/90">{eventTypeLabel(t.eventType)}</span>
+                      {t.filter?.repo && <span className="shrink-0 text-muted-foreground/70">{t.filter.repo}</span>}
                       <button
                         onClick={() => onOpenSession?.(`trig-${t.triggerId.slice(0, 8)}`)}
                         title="打开该规则的会话"
-                        className="min-w-0 flex-1 truncate text-left text-stone-400 hover:text-primary"
+                        className="min-w-0 flex-1 truncate text-left text-muted-foreground hover:text-primary"
                       >
                         {t.queryTemplate}
                       </button>
                       {t.needsApproval && (
-                        <ShieldAlert className="size-3 shrink-0 text-stone-500" aria-label="高危动作需审批" />
+                        <ShieldAlert className="size-3 shrink-0 text-muted-foreground/70" aria-label="高危动作需审批" />
                       )}
                       <button
                         onClick={() =>
                           void toggleTrigger(t.triggerId, !t.enabled).then(refresh).catch(() => toast.error("更新失败"))
                         }
-                        className="shrink-0 text-stone-500 hover:text-foreground"
+                        className="shrink-0 text-muted-foreground/70 hover:text-foreground"
                       >
                         {t.enabled ? "开" : "关"}
                       </button>
@@ -281,7 +281,7 @@ export function ConnectorsPanel({ onOpenSession }: { onOpenSession?: (sessionId:
                         onClick={() => twoStepDelete(t.triggerId, () => deleteTrigger(t.triggerId))}
                         title={confirming === t.triggerId ? "再点一次确认删除" : "删除规则"}
                         className={`shrink-0 rounded p-0.5 ${
-                          confirming === t.triggerId ? "text-destructive" : "text-stone-600 hover:text-destructive"
+                          confirming === t.triggerId ? "text-destructive" : "text-muted-foreground/60 hover:text-destructive"
                         }`}
                       >
                         <Trash2 className="size-3" />
@@ -333,7 +333,7 @@ export function ConnectorsPanel({ onOpenSession }: { onOpenSession?: (sessionId:
                             ))}
                           </SelectContent>
                         </Select>
-                        <label className="flex shrink-0 items-center gap-1 text-[11px] text-stone-400">
+                        <label className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
                           <input
                             type="checkbox"
                             checked={needsApproval}
@@ -361,7 +361,7 @@ export function ConnectorsPanel({ onOpenSession }: { onOpenSession?: (sessionId:
                         setRepo("");
                       }}
                       data-testid="trigger-new"
-                      className="flex items-center gap-1 text-[11px] text-stone-500 hover:text-primary"
+                      className="flex items-center gap-1 text-[11px] text-muted-foreground/70 hover:text-primary"
                     >
                       <Plus className="size-3" /> 添加触发规则
                     </button>
@@ -372,7 +372,7 @@ export function ConnectorsPanel({ onOpenSession }: { onOpenSession?: (sessionId:
           })}
         </div>
       </ScrollArea>
-      <div className="border-t p-2 text-[10px] leading-relaxed text-stone-600">
+      <div className="border-t p-2 text-[10px] leading-relaxed text-muted-foreground/60">
         命中事件自动起 run（进规则专属会话）；标「需审批」的规则里，高危动作会挂起等你在对话里审批。
       </div>
     </div>

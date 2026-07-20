@@ -227,13 +227,13 @@ export function GenerateWorkspace() {
         <div className="flex items-center gap-2 border-b px-6 py-4">
           <Sparkles className="size-5 text-primary" />
           <h1 className="text-xl font-semibold tracking-tight">生图工作区</h1>
-          <span className="text-xs text-stone-500">文生图 / 底图图生图 / 蒙版局部重绘（gpt-image-2·low）</span>
+          <span className="text-xs text-muted-foreground/70">文生图 / 底图图生图 / 蒙版局部重绘（gpt-image-2·low）</span>
         </div>
 
         <ScrollArea className="min-h-0 flex-1">
           <div className="mx-auto max-w-3xl px-6 py-5">
             {/* 生成表单 */}
-            <div className="rounded-2xl border bg-card p-3 shadow-sm">
+            <div className="rounded-lg border bg-card p-3 shadow-sm">
               <Textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
@@ -247,19 +247,19 @@ export function GenerateWorkspace() {
                 <div className="mb-2 flex flex-col gap-1.5 px-1">
                   <div className="flex items-center gap-2">
                     <img src={sourcePreview} alt="底图" className="size-12 rounded-md object-cover" />
-                    <span className="text-xs text-stone-400">底图（将按提示词修改）</span>
+                    <span className="text-xs text-muted-foreground">底图（将按提示词修改）</span>
                     <Button
                       variant="ghost"
                       size="sm"
                       data-testid="edit-mask"
                       disabled={uploading}
                       onClick={() => setMaskOpen(true)}
-                      className="gap-1 text-stone-400 hover:text-foreground"
+                      className="gap-1 text-muted-foreground hover:text-foreground"
                     >
                       <Brush className="size-3.5" />
                       {maskBlob ? "重画蒙版" : "编辑蒙版"}
                     </Button>
-                    <button onClick={clearSource} aria-label="移除底图" className="ml-auto text-stone-500 hover:text-foreground">
+                    <button onClick={clearSource} aria-label="移除底图" className="ml-auto text-muted-foreground/70 hover:text-foreground">
                       <X className="size-4" />
                     </button>
                   </div>
@@ -267,8 +267,8 @@ export function GenerateWorkspace() {
                     <div className="flex items-center gap-2">
                       {/* 蒙版是"黑底+透明洞"，衬白底让洞可见。 */}
                       <img src={maskPreview} alt="蒙版" data-testid="mask-thumb" className="size-12 rounded-md border bg-white object-cover" />
-                      <span className="text-xs text-stone-400">蒙版（透明区域=将被重绘）</span>
-                      <button onClick={clearMask} aria-label="移除蒙版" data-testid="mask-remove" className="ml-auto text-stone-500 hover:text-foreground">
+                      <span className="text-xs text-muted-foreground">蒙版（透明区域=将被重绘）</span>
+                      <button onClick={clearMask} aria-label="移除蒙版" data-testid="mask-remove" className="ml-auto text-muted-foreground/70 hover:text-foreground">
                         <X className="size-4" />
                       </button>
                     </div>
@@ -277,7 +277,7 @@ export function GenerateWorkspace() {
               )}
               <div className="flex flex-wrap items-center gap-2 px-1">
                 <input ref={fileRef} type="file" accept=".png,.jpg,.jpeg,.webp" className="hidden" onChange={(e) => onPickSource(e.target.files)} />
-                <Button variant="ghost" size="sm" disabled={uploading} onClick={() => fileRef.current?.click()} className="gap-1.5 text-stone-400 hover:text-foreground">
+                <Button variant="ghost" size="sm" disabled={uploading} onClick={() => fileRef.current?.click()} className="gap-1.5 text-muted-foreground hover:text-foreground">
                   {uploading ? <Loader2 className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
                   上传底图
                 </Button>
@@ -302,13 +302,13 @@ export function GenerateWorkspace() {
 
             {/* 历史网格 */}
             <div className="mt-6">
-              <div className="mb-2 text-xs font-medium tracking-wide text-stone-500 uppercase">生成历史</div>
+              <div className="mb-2 text-xs font-medium tracking-wide text-muted-foreground/70 uppercase">生成历史</div>
               {images === null ? (
                 <div className="grid grid-cols-3 gap-3 sm:grid-cols-4">
                   {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="aspect-square rounded-lg" />)}
                 </div>
               ) : hist.length === 0 ? (
-                <div className="py-12 text-center text-sm text-stone-500">还没有生成过图片。在上面写提示词，点“生成”。</div>
+                <div className="py-12 text-center text-sm text-muted-foreground/70">还没有生成过图片。在上面写提示词，点“生成”。</div>
               ) : (
                 <div className="grid grid-cols-3 gap-3 sm:grid-cols-4" data-testid="generate-history">
                   {hist.map((a) => <HistThumb key={a.resourceKey} art={a} onClick={() => setSelected(a)} />)}
@@ -330,12 +330,12 @@ export function GenerateWorkspace() {
               data-testid="use-as-source"
               disabled={settingSource || uploading}
               onClick={() => void useAsSource(selected)}
-              className="gap-1 text-stone-400 hover:text-foreground"
+              className="gap-1 text-muted-foreground hover:text-foreground"
             >
               {settingSource ? <Loader2 className="size-3.5 animate-spin" /> : <Brush className="size-3.5" />}
               编辑这张
             </Button>
-            <Button variant="ghost" size="icon" onClick={() => setSelected(null)} aria-label="关闭" className="size-7 text-stone-400 hover:text-foreground">
+            <Button variant="ghost" size="icon" onClick={() => setSelected(null)} aria-label="关闭" className="size-7 text-muted-foreground hover:text-foreground">
               <X />
             </Button>
           </div>

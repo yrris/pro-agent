@@ -6,12 +6,13 @@ import {
   TriangleAlertIcon,
 } from "lucide-react"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
+import { useTheme } from "@/lib/theme"
 
-// 裁剪：去掉 next-themes（本项目无 ThemeProvider，暗色是唯一主题）。
+// 裁剪：去掉 next-themes，主题跟随 lib/theme.ts（light/dark 双主题）。
 const Toaster = ({ ...props }: ToasterProps) => {
   return (
     <Sonner
-      theme="dark"
+      theme={useTheme()}
       className="toaster group"
       icons={{
         success: <CircleCheckIcon className="size-4" />,

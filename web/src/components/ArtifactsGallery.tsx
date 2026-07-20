@@ -48,8 +48,8 @@ function Thumb({ art }: { art: OwnerArtifact }) {
     );
   }
   return (
-    <div className="flex h-28 w-full items-center justify-center rounded-t-xl bg-black/20">
-      <FileText className="size-9 text-stone-500" />
+    <div className="flex h-28 w-full items-center justify-center rounded-t-xl bg-accent/50">
+      <FileText className="size-9 text-muted-foreground/70" />
     </div>
   );
 }
@@ -107,13 +107,13 @@ export function ArtifactsGallery({ onOpenSession }: { onOpenSession?: (sessionId
         <div className="flex items-center gap-2 border-b px-6 py-4">
           <FolderOpen className="size-5 text-primary" />
           <h1 className="text-xl font-semibold tracking-tight">产物</h1>
-          <span className="text-xs text-stone-500">跨会话生成的图片、报告、网页等</span>
+          <span className="text-xs text-muted-foreground/70">跨会话生成的图片、报告、网页等</span>
           <Button
             variant="ghost"
             size="icon"
             onClick={refresh}
             aria-label="刷新"
-            className="ml-auto size-8 text-stone-400 hover:text-foreground"
+            className="ml-auto size-8 text-muted-foreground hover:text-foreground"
           >
             <RotateCw />
           </Button>
@@ -121,7 +121,7 @@ export function ArtifactsGallery({ onOpenSession }: { onOpenSession?: (sessionId
         {/* 搜索 + 类型筛选 */}
         <div className="flex items-center gap-2 px-6 py-3">
           <div className="relative min-w-0 flex-1">
-            <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-stone-500" />
+            <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground/70" />
             <Input
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -151,8 +151,8 @@ export function ArtifactsGallery({ onOpenSession }: { onOpenSession?: (sessionId
               </div>
             )}
             {items !== null && filtered.length === 0 && (
-              <div className="flex flex-col items-center justify-center py-20 text-center text-sm text-stone-500">
-                <FileImage className="mb-2 size-8 text-stone-600" />
+              <div className="flex flex-col items-center justify-center py-20 text-center text-sm text-muted-foreground/70">
+                <FileImage className="mb-2 size-8 text-muted-foreground/60" />
                 {items.length === 0 ? "还没有任何产物。生成图片/报告/网页后会归档在这里。" : "没有匹配的产物。"}
               </div>
             )}
@@ -167,8 +167,8 @@ export function ArtifactsGallery({ onOpenSession }: { onOpenSession?: (sessionId
                 >
                   <Thumb art={a} />
                   <div className="p-2.5">
-                    <div className="truncate text-sm text-stone-200">{a.fileName || a.name}</div>
-                    <div className="mt-0.5 truncate text-[10px] text-stone-500">{a.mimeType || "文件"}</div>
+                    <div className="truncate text-sm text-foreground">{a.fileName || a.name}</div>
+                    <div className="mt-0.5 truncate text-[10px] text-muted-foreground/70">{a.mimeType || "文件"}</div>
                   </div>
                 </button>
               ))}
@@ -192,7 +192,7 @@ export function ArtifactsGallery({ onOpenSession }: { onOpenSession?: (sessionId
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 text-xs text-stone-400 hover:text-foreground"
+                className="h-7 text-xs text-muted-foreground hover:text-foreground"
                 onClick={() => onOpenSession(selected.sessionId)}
               >
                 打开来源会话
@@ -203,7 +203,7 @@ export function ArtifactsGallery({ onOpenSession }: { onOpenSession?: (sessionId
               size="icon"
               onClick={() => setSelected(null)}
               aria-label="关闭"
-              className="size-7 text-stone-400 hover:text-foreground"
+              className="size-7 text-muted-foreground hover:text-foreground"
             >
               <X />
             </Button>

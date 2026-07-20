@@ -99,13 +99,13 @@ export function SchedulesPanel({ onOpenSession }: { onOpenSession?: (sessionId: 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-1.5 border-b px-3 py-2">
-        <span className="min-w-0 flex-1 truncate text-xs text-stone-500">定时任务（Proactive）</span>
+        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/70">定时任务（Proactive）</span>
         <Button
           variant="ghost"
           size="icon"
           onClick={() => setCreating((v) => !v)}
           aria-label="新建定时任务"
-          className="size-7 text-stone-400 hover:text-foreground"
+          className="size-7 text-muted-foreground hover:text-foreground"
         >
           <Plus />
         </Button>
@@ -114,7 +114,7 @@ export function SchedulesPanel({ onOpenSession }: { onOpenSession?: (sessionId: 
           size="icon"
           onClick={() => void refresh()}
           aria-label="刷新"
-          className="size-7 text-stone-400 hover:text-foreground"
+          className="size-7 text-muted-foreground hover:text-foreground"
         >
           <RotateCw />
         </Button>
@@ -168,9 +168,9 @@ export function SchedulesPanel({ onOpenSession }: { onOpenSession?: (sessionId: 
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-2">
-          {items === null && <div className="p-3 text-xs text-stone-500">加载中…</div>}
+          {items === null && <div className="p-3 text-xs text-muted-foreground/70">加载中…</div>}
           {items?.length === 0 && !creating && (
-            <div className="p-4 text-center text-xs leading-relaxed text-stone-500">
+            <div className="p-4 text-center text-xs leading-relaxed text-muted-foreground/70">
               还没有定时任务。
               <br />点 + 创建：平台会按间隔自动运行，产出进对应会话。
             </div>
@@ -181,11 +181,11 @@ export function SchedulesPanel({ onOpenSession }: { onOpenSession?: (sessionId: 
               className="group mb-1.5 rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-accent/50"
             >
               <div className="flex items-center gap-2">
-                <CalendarClock className={`size-4 shrink-0 ${it.enabled ? "text-primary" : "text-stone-600"}`} />
+                <CalendarClock className={`size-4 shrink-0 ${it.enabled ? "text-primary" : "text-muted-foreground/60"}`} />
                 <button
                   onClick={() => onOpenSession?.(it.sessionId)}
                   title="打开该任务的会话"
-                  className="min-w-0 flex-1 truncate text-left text-sm text-stone-200 hover:text-primary"
+                  className="min-w-0 flex-1 truncate text-left text-sm text-foreground hover:text-primary"
                 >
                   {it.query}
                 </button>
@@ -195,13 +195,13 @@ export function SchedulesPanel({ onOpenSession }: { onOpenSession?: (sessionId: 
                   className={`shrink-0 rounded p-1 transition-colors ${
                     confirming === it.scheduleId
                       ? "bg-destructive/20 text-destructive"
-                      : "text-stone-500 opacity-0 hover:text-destructive group-hover:opacity-100"
+                      : "text-muted-foreground/70 opacity-0 hover:text-destructive group-hover:opacity-100"
                   }`}
                 >
                   <Trash2 className="size-3.5" />
                 </button>
               </div>
-              <div className="mt-0.5 flex items-center gap-2 pl-6 text-[10px] text-stone-500">
+              <div className="mt-0.5 flex items-center gap-2 pl-6 text-[10px] text-muted-foreground/70">
                 <span>{intervalLabel(it.intervalSeconds)}</span>
                 <span>·</span>
                 <button onClick={() => void onToggle(it)} className="hover:text-foreground">
@@ -212,7 +212,7 @@ export function SchedulesPanel({ onOpenSession }: { onOpenSession?: (sessionId: 
           ))}
         </div>
       </ScrollArea>
-      <div className="border-t p-2 text-[10px] leading-relaxed text-stone-600">
+      <div className="border-t p-2 text-[10px] leading-relaxed text-muted-foreground/60">
         触发的运行会出现在任务专属会话里（列表单条目、上下文延续）；系统繁忙时顺延到下个周期。
       </div>
     </div>

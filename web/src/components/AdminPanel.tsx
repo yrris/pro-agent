@@ -57,8 +57,8 @@ function UsersTab({ currentUserId }: { currentUserId: string }) {
   return (
     <ScrollArea className="min-h-0 flex-1">
       <div className="space-y-1.5 px-6 py-3" data-testid="admin-users">
-        {users === null && <div className="p-3 text-xs text-stone-500">加载中…</div>}
-        {users?.length === 0 && <div className="p-3 text-xs text-stone-500">还没有用户。</div>}
+        {users === null && <div className="p-3 text-xs text-muted-foreground/70">加载中…</div>}
+        {users?.length === 0 && <div className="p-3 text-xs text-muted-foreground/70">还没有用户。</div>}
         {users?.map((u) => (
           <div
             key={u.userId}
@@ -67,10 +67,10 @@ function UsersTab({ currentUserId }: { currentUserId: string }) {
           >
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="truncate text-sm text-stone-200">{u.username}</span>
+                <span className="truncate text-sm text-foreground">{u.username}</span>
                 <Badge variant={u.role === "admin" ? "default" : "secondary"}>{u.role}</Badge>
               </div>
-              <div className="mt-0.5 text-[10px] text-stone-500">
+              <div className="mt-0.5 text-[10px] text-muted-foreground/70">
                 {u.runCount} 次运行 · 注册于 {fmtDate(u.createdAt)}
               </div>
             </div>
@@ -92,9 +92,9 @@ function UsersTab({ currentUserId }: { currentUserId: string }) {
 }
 
 function statusColor(s: string): string {
-  if (s === "SUCCESS") return "text-emerald-500";
+  if (s === "SUCCESS") return "text-success";
   if (s === "RUNNING") return "text-primary";
-  return "text-rose-500";
+  return "text-destructive";
 }
 
 function RunsTab() {
@@ -114,8 +114,8 @@ function RunsTab() {
   return (
     <ScrollArea className="min-h-0 flex-1">
       <div className="space-y-1 px-6 py-3" data-testid="admin-runs">
-        {runs === null && <div className="p-3 text-xs text-stone-500">加载中…</div>}
-        {runs?.length === 0 && <div className="p-3 text-xs text-stone-500">还没有任何运行。</div>}
+        {runs === null && <div className="p-3 text-xs text-muted-foreground/70">加载中…</div>}
+        {runs?.length === 0 && <div className="p-3 text-xs text-muted-foreground/70">还没有任何运行。</div>}
         {runs?.map((r) => (
           <div
             key={r.runId}
@@ -123,8 +123,8 @@ function RunsTab() {
             data-testid="admin-run-row"
           >
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm text-stone-200">{r.query || "（无查询）"}</div>
-              <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-stone-500">
+              <div className="truncate text-sm text-foreground">{r.query || "（无查询）"}</div>
+              <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground/70">
                 <Badge variant="secondary">{r.ownerId}</Badge>
                 <span>{r.agentType}</span>
                 <span>·</span>
@@ -141,8 +141,8 @@ function RunsTab() {
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-xl border p-4">
-      <div className="text-[11px] uppercase tracking-wide text-stone-500">{label}</div>
+    <div className="rounded-lg border p-4">
+      <div className="text-[11px] uppercase tracking-wide text-muted-foreground/70">{label}</div>
       <div className="mt-1 text-2xl font-semibold text-foreground">{value.toLocaleString()}</div>
     </div>
   );
@@ -169,7 +169,7 @@ function StatsTab() {
       <div className="space-y-5 px-6 py-4" data-testid="admin-stats">
         {report ? (
           <>
-            <div className="text-xs text-stone-500">最近 {report.days} 天，全平台跨用户聚合。</div>
+            <div className="text-xs text-muted-foreground/70">最近 {report.days} 天，全平台跨用户聚合。</div>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Stat label="运行数" value={report.totals.runs} />
               <Stat label="输入 token" value={report.totals.inputTokens} />
@@ -177,13 +177,13 @@ function StatsTab() {
               <Stat label="模型调用" value={report.totals.modelCalls} />
             </div>
             <div>
-              <div className="mb-2 text-sm font-medium text-stone-300">按模式</div>
+              <div className="mb-2 text-sm font-medium text-foreground/90">按模式</div>
               <div className="space-y-1">
-                {report.byAgent.length === 0 && <div className="text-xs text-stone-500">暂无数据。</div>}
+                {report.byAgent.length === 0 && <div className="text-xs text-muted-foreground/70">暂无数据。</div>}
                 {report.byAgent.map((a) => (
                   <div key={a.agentType} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
-                    <span className="text-stone-300">{a.agentType}</span>
-                    <span className="text-stone-500">
+                    <span className="text-foreground/90">{a.agentType}</span>
+                    <span className="text-muted-foreground/70">
                       {a.runs} 次 · {a.inputTokens + a.outputTokens} token
                     </span>
                   </div>
@@ -192,14 +192,14 @@ function StatsTab() {
             </div>
           </>
         ) : failed ? (
-          <div className="flex items-center gap-3 p-3 text-xs text-stone-500" data-testid="admin-stats-error">
+          <div className="flex items-center gap-3 p-3 text-xs text-muted-foreground/70" data-testid="admin-stats-error">
             <span>系统用量加载失败。</span>
             <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void refresh()}>
               重试
             </Button>
           </div>
         ) : (
-          <div className="p-3 text-xs text-stone-500">加载中…</div>
+          <div className="p-3 text-xs text-muted-foreground/70">加载中…</div>
         )}
       </div>
     </ScrollArea>
@@ -213,7 +213,7 @@ export function AdminPanel({ currentUserId }: { currentUserId: string }) {
       <div className="flex items-center gap-2 border-b px-6 py-4">
         <Shield className="size-5 text-primary" />
         <h1 className="text-xl font-semibold tracking-tight">管理后台</h1>
-        <span className="text-xs text-stone-500">用户 · 全部运行 · 系统用量（跨 owner）</span>
+        <span className="text-xs text-muted-foreground/70">用户 · 全部运行 · 系统用量（跨 owner）</span>
       </div>
       <Tabs defaultValue="users" className="flex min-h-0 flex-1 flex-col gap-0">
         <div className="px-6 py-3">

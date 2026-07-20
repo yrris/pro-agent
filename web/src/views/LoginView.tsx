@@ -37,9 +37,9 @@ export function LoginView({
 
   return (
     <div className="flex h-full items-center justify-center p-6">
-      <Card className="w-full max-w-sm" data-testid="login-card">
+      <Card className="w-full max-w-sm rounded-xl border bg-card shadow-sm" data-testid="login-card">
         <CardHeader>
-          <CardTitle className="text-2xl font-semibold">
+          <CardTitle className="font-display text-2xl font-semibold">
             <span className="text-primary">pro</span>-agent
           </CardTitle>
           <CardDescription>
@@ -85,12 +85,12 @@ export function LoginView({
               setMode((m) => (m === "login" ? "register" : "login"));
               setError("");
             }}
-            className="mt-4 w-full text-center text-xs text-stone-500 hover:text-foreground"
+            className="mt-4 w-full text-center text-xs text-muted-foreground/70 hover:text-foreground"
             data-testid="login-toggle"
           >
             {mode === "login" ? "没有账号？注册一个" : "已有账号？去登录"}
           </button>
-          <div className="mt-4 text-[11px] leading-relaxed text-stone-600">
+          <div className="mt-4 text-[11px] leading-relaxed text-muted-foreground/60">
             账号即身份（owner），用于 run/产物/知识库的归属与隔离。管理员可在管理后台管理用户与查看系统用量。
           </div>
         </CardContent>

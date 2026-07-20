@@ -42,7 +42,7 @@ export function UsageDialog({ open, onOpenChange }: { open: boolean; onOpenChang
         <DialogDescription>
           事件账本聚合的只读投影；token 为模型上报的累计值（中断/超时的 run 不计）。
         </DialogDescription>
-        {failed && <div className="text-sm text-rose-400">加载失败，请稍后重试。</div>}
+        {failed && <div className="text-sm text-destructive">加载失败，请稍后重试。</div>}
         {!report && !failed && (
           <div className="space-y-2">
             <Skeleton className="h-14 w-full" />
@@ -58,16 +58,16 @@ export function UsageDialog({ open, onOpenChange }: { open: boolean; onOpenChang
                 ["输出 tokens", fmt(report.totals.outputTokens)],
                 ["模型调用", fmt(report.totals.modelCalls)],
               ].map(([label, value]) => (
-                <div key={label} className="rounded-xl border bg-card px-2 py-3">
-                  <div className="text-lg font-semibold text-foreground">{value}</div>
-                  <div className="text-[10px] text-stone-500">{label}</div>
+                <div key={label} className="rounded-lg border bg-card px-2 py-3">
+                  <div className="font-display text-lg font-semibold text-foreground">{value}</div>
+                  <div className="text-[10px] text-muted-foreground/70">{label}</div>
                 </div>
               ))}
             </div>
 
             {report.daily.length > 0 && (
               <div>
-                <div className="mb-1.5 text-xs text-stone-500">每日 token（输入+输出）</div>
+                <div className="mb-1.5 text-xs text-muted-foreground/70">每日 token（输入+输出）</div>
                 <div className="flex h-20 items-end gap-1">
                   {report.daily.map((d) => (
                     <div
@@ -83,11 +83,11 @@ export function UsageDialog({ open, onOpenChange }: { open: boolean; onOpenChang
 
             {report.byAgent.length > 0 && (
               <div className="space-y-1">
-                <div className="text-xs text-stone-500">按模式</div>
+                <div className="text-xs text-muted-foreground/70">按模式</div>
                 {report.byAgent.map((a) => (
                   <div key={a.agentType} className="flex items-center gap-2 text-sm">
-                    <span className="w-20 shrink-0 text-stone-300">{agentLabel(a.agentType)}</span>
-                    <span className="text-xs text-stone-500">
+                    <span className="w-20 shrink-0 text-foreground/90">{agentLabel(a.agentType)}</span>
+                    <span className="text-xs text-muted-foreground/70">
                       {a.runs} 次 · {fmt(a.inputTokens)} 入 / {fmt(a.outputTokens)} 出
                     </span>
                   </div>

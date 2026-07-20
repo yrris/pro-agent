@@ -8,12 +8,15 @@ import {
   LogOut,
   ImagePlus,
   MessageSquare,
+  Moon,
   PanelLeft,
   Plug,
   Plus,
   Shield,
+  Sun,
   Trash2,
 } from "lucide-react";
+import { toggleTheme, useTheme } from "@/lib/theme";
 import type { SessionView } from "../lib/sessions";
 import type { NavView } from "../lib/uiPrefs";
 import type { HealthReport } from "../lib/api/client";
@@ -52,7 +55,7 @@ function NavItem({
     <button
       onClick={onClick}
       className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition-colors ${
-        active ? "bg-accent text-foreground" : "text-stone-400 hover:bg-accent/50 hover:text-foreground"
+        active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
       }`}
     >
       {icon}
@@ -82,7 +85,7 @@ function RailButton({
           onClick={onClick}
           aria-label={ariaLabel ?? label}
           className={`flex size-9 items-center justify-center rounded-lg transition-colors ${
-            active ? "bg-accent text-foreground" : "text-stone-400 hover:bg-accent/50 hover:text-foreground"
+            active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
           }`}
         >
           {children}
@@ -114,7 +117,8 @@ export function SidebarRail({
   onOpenUsage: () => void;
   onLogout: () => void;
 }) {
-  const healthColor = !health ? "bg-stone-500" : health.healthy ? "bg-emerald-500" : "bg-rose-500";
+  const healthColor = !health ? "bg-muted-foreground/50" : health.healthy ? "bg-success" : "bg-destructive";
+  const theme = useTheme();
   return (
     <aside className="flex w-14 shrink-0 flex-col items-center gap-1 border-r bg-background py-3">
       <RailButton label="展开侧边栏" onClick={onExpand}>
@@ -138,6 +142,9 @@ export function SidebarRail({
           </TooltipTrigger>
           <TooltipContent side="right">{!health ? "检测中" : health.healthy ? "健康" : "异常"}</TooltipContent>
         </Tooltip>
+        <RailButton label={theme === "dark" ? "切换浅色" : "切换暗色"} onClick={toggleTheme}>
+          {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+        </RailButton>
         <RailButton label="用量与成本" onClick={onOpenUsage}>
           <ChartColumn className="size-4" />
         </RailButton>
@@ -170,17 +177,17 @@ function SessionRow({
         active ? "border-primary/40 bg-primary/10" : "border-transparent hover:bg-accent/50"
       }`}
     >
-      <button onClick={onSelect} className="block w-full p-2 pr-8 text-left">
-        <div className="flex items-center gap-1">
+      <button onClick={onSelect} className="block w-full overflow-hidden p-2 pr-8 text-left">
+        <div className="flex min-w-0 items-center gap-1">
           {/* docs/14：分叉会话标记（继承父会话历史的新时间线） */}
           {s.forkedFrom && (
-            <span title="分叉会话" className="shrink-0 text-stone-500">
+            <span title="分叉会话" className="shrink-0 text-muted-foreground/70">
               <GitBranch className="size-3" />
             </span>
           )}
-          <div className="truncate text-sm text-stone-200">{s.title || "（无标题）"}</div>
+          <div className="min-w-0 flex-1 truncate text-sm text-foreground">{s.title || "（无标题）"}</div>
         </div>
-        <div className="mt-0.5 flex items-center gap-1 text-[10px] text-stone-500">
+        <div className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground/70">
           <span>{s.agentType}</span>
           <span>·</span>
           <span>{s.pendingLocal ? "新会话" : `${s.runCount} 轮`}</span>
@@ -201,7 +208,7 @@ function SessionRow({
         className={`absolute right-1.5 top-1.5 rounded p-1 transition-colors ${
           confirming
             ? "bg-destructive/20 text-destructive"
-            : "text-stone-500 opacity-0 hover:text-destructive group-hover:opacity-100"
+            : "text-muted-foreground/70 opacity-0 hover:text-destructive group-hover:opacity-100"
         }`}
       >
         <Trash2 className="size-3.5" />
@@ -239,7 +246,8 @@ export function Sidebar({
   onOpenUsage: () => void;
   onLogout: () => void;
 }) {
-  const healthColor = !health ? "bg-stone-500" : health.healthy ? "bg-emerald-500" : "bg-rose-500";
+  const theme = useTheme();
+  const healthColor = !health ? "bg-muted-foreground/50" : health.healthy ? "bg-success" : "bg-destructive";
   const healthLabel = !health ? "检测中" : health.healthy ? "健康" : "异常";
   const healthDetail = health
     ? Object.entries(health.checks)
@@ -251,7 +259,7 @@ export function Sidebar({
     <aside className="flex w-64 shrink-0 flex-col border-r bg-background">
       {/* 品牌 + 折叠 */}
       <div className="flex items-center gap-1 px-3 py-3">
-        <span className="flex-1 text-lg font-semibold tracking-tight">
+        <span className="flex-1 font-display text-lg font-semibold tracking-tight">
           <span className="text-primary">pro</span>-agent
         </span>
         <Tooltip>
@@ -261,7 +269,7 @@ export function Sidebar({
               size="icon"
               onClick={onToggleSidebar}
               aria-label="收起侧边栏"
-              className="size-7 text-stone-400 hover:text-foreground"
+              className="size-7 text-muted-foreground hover:text-foreground"
             >
               <PanelLeft />
             </Button>
@@ -293,12 +301,13 @@ export function Sidebar({
       {/* 会话列表（仅"对话"视图下显示） */}
       {activeNav === "chat" && (
         <>
-          <div className="px-3 pt-3 pb-1 text-[10px] font-medium tracking-wide text-stone-600 uppercase">
+          <div className="px-3 pt-3 pb-1 text-[10px] font-medium tracking-wide text-muted-foreground/60 uppercase">
             最近对话
           </div>
-          <ScrollArea className="min-h-0 flex-1">
+          {/* viewport 子层默认 display:table 会被长标题撑宽（横向滚动 bug），覆写为 block 让 truncate 生效 */}
+          <ScrollArea className="min-h-0 flex-1 [&_[data-radix-scroll-area-viewport]>div]:!block">
             <div className="px-2 pb-2">
-              {sessions.length === 0 && <div className="px-2 py-3 text-xs text-stone-500">还没有会话</div>}
+              {sessions.length === 0 && <div className="px-2 py-3 text-xs text-muted-foreground/70">还没有会话</div>}
               {sessions.map((s) => (
                 <SessionRow
                   key={s.id}
@@ -318,7 +327,7 @@ export function Sidebar({
       <div className="flex items-center gap-1.5 border-t px-3 py-2">
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="flex items-center gap-1.5 text-xs text-stone-400">
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <span className={`h-2 w-2 rounded-full ${healthColor}`} />
               {healthLabel}
             </span>
@@ -332,18 +341,33 @@ export function Sidebar({
         <div className="ml-auto flex items-center gap-0.5">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={onOpenUsage} aria-label="用量与成本" className="size-7 text-stone-400 hover:text-foreground">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleTheme}
+                aria-label={theme === "dark" ? "切换浅色" : "切换暗色"}
+                data-testid="theme-toggle"
+                className="size-7 text-muted-foreground hover:text-foreground"
+              >
+                {theme === "dark" ? <Sun /> : <Moon />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{theme === "dark" ? "切换浅色" : "切换暗色"}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" onClick={onOpenUsage} aria-label="用量与成本" className="size-7 text-muted-foreground hover:text-foreground">
                 <ChartColumn />
               </Button>
             </TooltipTrigger>
             <TooltipContent>用量与成本</TooltipContent>
           </Tooltip>
-          <span className="max-w-20 truncate px-1 text-xs text-stone-400" title={userId}>
+          <span className="max-w-20 truncate px-1 text-xs text-muted-foreground" title={userId}>
             {userId}
           </span>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={onLogout} aria-label="退出" className="size-7 text-stone-400 hover:text-foreground">
+              <Button variant="ghost" size="icon" onClick={onLogout} aria-label="退出" className="size-7 text-muted-foreground hover:text-foreground">
                 <LogOut />
               </Button>
             </TooltipTrigger>

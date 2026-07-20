@@ -40,7 +40,8 @@ export default function App() {
   const [usageOpen, setUsageOpen] = useState(false);
   const [artifactsWidth, setArtifactsWidth] = useState(prefs.artifactsWidth);
   useEffect(() => {
-    saveUiPrefs({ sidebarOpen, artifactsWidth, activeNav });
+    // theme 由 lib/theme.ts 独立管理，这里透传当前值避免覆盖
+    saveUiPrefs({ ...loadUiPrefs(), sidebarOpen, artifactsWidth, activeNav });
   }, [sidebarOpen, artifactsWidth, activeNav]);
   // 会话列表 = 服务端（权威）+ 本地草稿（未落库新会话）两个状态的纯函数派生，
   // 不再手工同步——任何一侧更新，列表自动重算。

@@ -169,7 +169,7 @@ export function MaskEditor({
             <Eraser className="size-4" />
             橡皮
           </Button>
-          <label className="ml-2 flex items-center gap-2 text-xs text-stone-500">
+          <label className="ml-2 flex items-center gap-2 text-xs text-muted-foreground/70">
             粗细
             <input
               type="range"
@@ -189,7 +189,7 @@ export function MaskEditor({
               data-testid="mask-undo"
               disabled={strokes.length === 0}
               onClick={() => setStrokes((prev) => prev.slice(0, -1))}
-              className="gap-1.5 text-stone-500 hover:text-foreground"
+              className="gap-1.5 text-muted-foreground/70 hover:text-foreground"
             >
               <Undo2 className="size-4" />
               撤销
@@ -200,7 +200,7 @@ export function MaskEditor({
               data-testid="mask-clear"
               disabled={strokes.length === 0}
               onClick={() => setStrokes([])}
-              className="gap-1.5 text-stone-500 hover:text-foreground"
+              className="gap-1.5 text-muted-foreground/70 hover:text-foreground"
             >
               <Trash2 className="size-4" />
               清空
@@ -209,7 +209,7 @@ export function MaskEditor({
         </div>
 
         {/* 画布：逻辑尺寸=naturalSize（保证 mask 与底图逐像素一致），显示 CSS 缩放。 */}
-        <div className="flex max-h-[60vh] items-center justify-center overflow-hidden rounded-xl border bg-stone-950/5 dark:bg-stone-50/5">
+        <div className="flex max-h-[60vh] items-center justify-center overflow-hidden rounded-lg border bg-accent/50">
           {natural ? (
             <canvas
               ref={canvasRef}
@@ -229,7 +229,7 @@ export function MaskEditor({
         </div>
 
         <div className="flex items-center justify-end gap-2">
-          <span className="mr-auto text-xs text-stone-500">
+          <span className="mr-auto text-xs text-muted-foreground/70">
             {strokes.length === 0 ? "先涂抹至少一笔才能确认" : `已画 ${strokes.length} 笔`}
           </span>
           <Button variant="ghost" size="sm" onClick={onClose}>
