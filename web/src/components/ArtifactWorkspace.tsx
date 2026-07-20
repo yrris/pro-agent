@@ -1,9 +1,10 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, Download, X } from "lucide-react";
+import { Check, Copy, Download, TriangleAlert, X } from "lucide-react";
 import { toast } from "sonner";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
 import { downloadArtifact } from "../lib/api/client";
 import { getUserId } from "../lib/identity";
+import { DISPLAY_SLICE_LIMIT, formatChars, sliceForDisplay } from "../lib/textPreview";
 import { isChartArtifact } from "../lib/workspaceFeed";
 import { Markdown } from "./common";
 import { EChartsPreview } from "./workspace/EChartsPreview";
@@ -93,15 +94,29 @@ function useArtifactText(url: string, enabled: boolean) {
     if (!enabled) return;
     let alive = true;
     setText(null);
+    // 全量获取，绝不在 fetch 层截断——iframe 预览与「复制内容」必须拿到完整文本
+    //（曾硬截 200KB：大 HTML 被截在内联 base64 图中间，预览/代码/复制全残缺）。
+    // DOM 重的展示（<pre>/Markdown）由 FilePreview 做展示层截断并明确告知。
     void fetch(url, { headers: { "X-User-Id": getUserId() || "anonymous" } })
       .then((r) => r.text())
-      .then((t) => alive && setText(t.slice(0, 200_000)))
+      .then((t) => alive && setText(t))
       .catch(() => alive && setText("（预览失败）"));
     return () => {
       alive = false;
     };
   }, [url, enabled]);
   return text;
+}
+
+// 展示层截断横幅：告诉用户「只是没全部渲染出来」，产物/复制/下载都是完整的。
+function TruncatedBanner({ totalChars }: { totalChars: number }) {
+  return (
+    <div className="mb-2 flex shrink-0 items-center gap-1.5 rounded-md border border-warning/25 bg-warning/10 px-2.5 py-1.5 text-xs text-warning">
+      <TriangleAlert className="size-3.5 shrink-0" />
+      内容过大，此处仅渲染前 {formatChars(DISPLAY_SLICE_LIMIT)} 字符（全文 {formatChars(totalChars)}
+      ）；「复制内容 / 下载」均为完整文件。
+    </div>
+  );
 }
 
 function FilePreview({
@@ -151,12 +166,17 @@ function FilePreview({
         </div>
       );
     // 文档级预览美化：markdown 渲染成文档、html 进沙箱 iframe，而不是源码 dump。
+    // 展示层截断只作用于 <pre>/Markdown 这类 DOM 重渲染；iframe srcDoc 恒用全量文本。
+    const display = sliceForDisplay(text);
     if (isHtml(mime, name)) {
       if (htmlMode === "code")
         return (
-          <pre className="h-full overflow-auto rounded-lg bg-code-bg p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground/90">
-            {text}
-          </pre>
+          <div className="flex h-full min-h-0 flex-col">
+            {display.truncated && <TruncatedBanner totalChars={display.totalChars} />}
+            <pre className="min-h-0 flex-1 overflow-auto rounded-lg bg-code-bg p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground/90">
+              {display.shown}
+            </pre>
+          </div>
         );
       // allow-scripts：生成的交互网页/图表能跑；srcDoc 保持 opaque origin，
       // 且绝不加 allow-same-origin（同源组合=沙箱逃逸）；内部 fetch 无 X-User-Id 撞 403 墙。
@@ -164,14 +184,20 @@ function FilePreview({
     }
     if (isMarkdown(mime, name))
       return (
-        <div className="h-full overflow-auto p-4">
-          <Markdown>{text}</Markdown>
+        <div className="flex h-full min-h-0 flex-col">
+          {display.truncated && <div className="px-4 pt-3"><TruncatedBanner totalChars={display.totalChars} /></div>}
+          <div className="min-h-0 flex-1 overflow-auto p-4">
+            <Markdown>{display.shown}</Markdown>
+          </div>
         </div>
       );
     return (
-      <pre className="h-full overflow-auto whitespace-pre-wrap rounded-lg bg-code-bg p-3 text-xs leading-relaxed text-foreground/90">
-        {text}
-      </pre>
+      <div className="flex h-full min-h-0 flex-col">
+        {display.truncated && <TruncatedBanner totalChars={display.totalChars} />}
+        <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded-lg bg-code-bg p-3 text-xs leading-relaxed text-foreground/90">
+          {display.shown}
+        </pre>
+      </div>
     );
   }
   return (

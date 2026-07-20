@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { EChartsType } from "echarts/core";
 import type { ArtifactRef } from "../../lib/sse/frameTypes";
 import { getUserId } from "../../lib/identity";
+import { sliceForDisplay } from "../../lib/textPreview";
 import { useTheme } from "@/lib/theme";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -19,9 +20,11 @@ function useArtifactText(url: string, enabled: boolean) {
     if (!enabled) return;
     let alive = true;
     setText(null);
+    // 全量获取，不在 fetch 层截断——大数据集的 echarts-option.json 截断会直接 JSON 解析失败
+    //（与 ArtifactWorkspace 同一缺陷根源）；JSON 兜底视图的展示截断在渲染处做。
     void fetch(url, { headers: { "X-User-Id": getUserId() || "anonymous" } })
       .then((r) => r.text())
-      .then((t) => alive && setText(t.slice(0, 200_000)))
+      .then((t) => alive && setText(t))
       .catch(() => alive && setText("（预览失败）"));
     return () => {
       alive = false;
@@ -134,7 +137,7 @@ export function EChartsPreview({ art }: { art: ArtifactRef }) {
         </div>
       ) : (
         <pre className="min-h-0 flex-1 overflow-auto rounded-lg bg-code-bg p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground/90">
-          {text}
+          {sliceForDisplay(text).shown}
         </pre>
       )}
     </div>
