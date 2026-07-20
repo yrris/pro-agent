@@ -81,6 +81,9 @@ export interface ThoughtView {
   kind: "tool" | "plan";
   text: string;
   plannerRoundId?: string;
+  // additive：思考时间戳（首帧/末帧 messageTime），ThoughtBlock 折叠行算"已思考 n 秒"。
+  firstAt?: string;
+  lastAt?: string;
 }
 
 export interface ToolCallView {
@@ -139,6 +142,8 @@ export interface RunState {
   result?: { text: string; artifacts: ArtifactRef[] };
   approvals: Record<string, ApprovalView>; // M11
   artifacts: ArtifactRef[];
+  // additive：toolCallId → resourceKey[]（ToolRow 图片缩略图条按调用归属 artifact）。
+  artifactsByCall?: Record<string, string[]>;
   finished: boolean;
   order: OrderEntry[];
   unknown: SseFrame[];

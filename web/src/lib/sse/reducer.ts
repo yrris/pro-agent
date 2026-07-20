@@ -40,6 +40,8 @@ export function applyFrame(state: RunState, frame: SseFrame): RunState {
           kind,
           text: (prev?.text ?? "") + (delta ?? ""), // 累加
           plannerRoundId: frame.resultMap?.plannerRoundId ?? prev?.plannerRoundId,
+          firstAt: prev?.firstAt ?? frame.messageTime, // additive：首帧时间
+          lastAt: frame.messageTime, // additive：每帧更新
         },
       };
       next.order = withOrder(state.order, "thought", mid);
@@ -74,6 +76,14 @@ export function applyFrame(state: RunState, frame: SseFrame): RunState {
         next.order = withOrder(state.order, "toolResult", tr.toolCallId);
       }
       next.artifacts = mergeArtifacts(state.artifacts, frame.artifactRefs);
+      // additive：artifact 归属到工具调用（resultMap.toolCallId 优先，toolResult 兜底）。
+      const callId = frame.resultMap?.toolCallId ?? tr?.toolCallId;
+      if (callId && frame.artifactRefs?.length) {
+        const prev = state.artifactsByCall ?? {};
+        const keys = new Set(prev[callId] ?? []);
+        for (const a of frame.artifactRefs) keys.add(a.resourceKey);
+        next.artifactsByCall = { ...prev, [callId]: [...keys] };
+      }
       break;
     }
     case "plan": {

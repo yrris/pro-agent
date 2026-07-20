@@ -138,3 +138,54 @@ describe("approval_request（M11 HITL）", () => {
     expect(s.toolCalls["tc1"].status).toBe("success");
   });
 });
+
+describe("additive 字段（紧凑工具状态行）", () => {
+  it("thought 记录 firstAt（首帧）/lastAt（每帧更新）", () => {
+    let s = emptyRunState();
+    s = applyFrame(s, f({ messageType: "tool_thought", messageId: "t1", toolThought: "a", messageTime: "2026-07-20T00:00:00Z" }));
+    s = applyFrame(s, f({ messageType: "tool_thought", messageId: "t1", toolThought: "b", messageTime: "2026-07-20T00:00:03Z" }));
+    expect(s.thoughts["t1"].firstAt).toBe("2026-07-20T00:00:00Z");
+    expect(s.thoughts["t1"].lastAt).toBe("2026-07-20T00:00:03Z");
+    expect(s.thoughts["t1"].text).toBe("ab"); // 累加语义不变
+  });
+
+  it("plan_thought 同样记录时间戳", () => {
+    let s = emptyRunState();
+    s = applyFrame(s, f({ messageType: "plan_thought", messageId: "p1", planThought: "x", messageTime: "T1" }));
+    s = applyFrame(s, f({ messageType: "plan_thought", messageId: "p1", planThought: "y", messageTime: "T2" }));
+    expect(s.thoughts["p1"].firstAt).toBe("T1");
+    expect(s.thoughts["p1"].lastAt).toBe("T2");
+  });
+
+  it("tool_result 把 artifact resourceKey 归属进 artifactsByCall（去重、按调用分组）", () => {
+    const art = (k: string) => ({ resourceKey: k, name: k, previewUrl: "", downloadUrl: "", fileName: k, mimeType: "image/png", size: 1, missing: false });
+    let s = emptyRunState();
+    s = applyFrame(s, f({
+      messageType: "tool_result",
+      toolResult: { toolName: "image_generate", toolResult: "ok", toolCallId: "c1" },
+      resultMap: { toolCallId: "c1" },
+      artifactRefs: [art("k1"), art("k2")],
+    }));
+    s = applyFrame(s, f({
+      messageType: "tool_result",
+      toolResult: { toolName: "image_generate", toolResult: "ok", toolCallId: "c1" },
+      resultMap: { toolCallId: "c1" },
+      artifactRefs: [art("k2")], // 重复 key 去重
+    }));
+    s = applyFrame(s, f({
+      messageType: "tool_result",
+      toolResult: { toolName: "write_report", toolResult: "ok", toolCallId: "c2" },
+      artifactRefs: [art("k3")], // 无 resultMap：toolResult.toolCallId 兜底
+    }));
+    expect(s.artifactsByCall?.["c1"]).toEqual(["k1", "k2"]);
+    expect(s.artifactsByCall?.["c2"]).toEqual(["k3"]);
+  });
+
+  it("无 artifactRefs 的 tool_result 不建 artifactsByCall 条目", () => {
+    const s = applyFrame(emptyRunState(), f({
+      messageType: "tool_result",
+      toolResult: { toolName: "calc", toolResult: "2", toolCallId: "c1" },
+    }));
+    expect(s.artifactsByCall?.["c1"]).toBeUndefined();
+  });
+});
