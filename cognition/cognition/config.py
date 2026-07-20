@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     planner_max_steps: int = Field(default=5, ge=1)
     # 深度研究模式（deep_research）的外层轮次上限：研究需要更多"检索-验证-推进"轮。
     research_max_steps: int = Field(default=8, ge=1)
+    # 每次图执行（react 主图 / plan·research 的每个执行分支）的工具调用硬预算，0=不限。
+    # 实测 DeepSeek 并行多调用×分支数可爆到单 run 961 次 web_fetch：拖满 RUN_TIMEOUT、
+    # 烧穿搜索额度与模型余额——达预算后 think 以 tool_choice="none" 强制收口。
+    max_tool_calls_per_branch: int = Field(default=40, ge=0)
 
     # —— HITL 人工审批（M11）——
     # 受保护工具名列表（COGNITION_APPROVAL_TOOLS='["script_runner"]'）；默认空=关闭。

@@ -103,3 +103,29 @@ def test_image_ocr_ingest_idempotent_across_text_drift():
     ingest([d2], "owner:u", store=store, embedder=emb, sparse=sp, stable_ids=True)
     c2 = store._c.count(store._col).count
     assert c1 == c2, f"图片 OCR 漂移导致重复入库：{c1}->{c2}"
+
+
+def test_render_page_inlines_uploaded_input_image_and_warns_missing():
+    """缺陷回归：上传原图 <img src="1.jpeg"> 相对引用未内联 → 沙箱预览空白。
+    修复后：SKILL_INPUT_DIR（input_files 暂存目录）里的裸文件名引用也内联；
+    找不到的引用保留原样并打印警告引导模型补 input_files。"""
+    gen = tempfile.mkdtemp()
+    inp = tempfile.mkdtemp()
+    out = tempfile.mkdtemp()
+    with open(os.path.join(inp, "1.jpeg"), "wb") as f:
+        f.write(b"\xff\xd8\xffJPEGFAKE")
+    env = {**os.environ, "SKILL_GENERATED_DIR": gen, "SKILL_INPUT_DIR": inp, "SKILL_OUTPUT_DIR": out}
+    html = (
+        '<html><body><img class="a" src="1.jpeg"><img src="lost.png">'
+        '<script src="app.js"></script><img src="https://x.cn/a.png"></body></html>'
+    )
+    script = os.path.join(os.path.dirname(__file__), "..", "runtime", "skills", "frontend-design", "scripts", "render_page.py")
+    r = subprocess.run(["python3", script, json.dumps({"title": "T", "html": html})], env=env, capture_output=True, text=True)
+    assert r.returncode == 0
+    assert "内联上传图 1 张" in r.stdout
+    assert "警告: 1 个本地图片引用未找到" in r.stdout and "lost.png" in r.stdout
+    site = open(os.path.join(out, "site.html")).read()
+    assert "data:image/jpeg;base64," in site  # 上传图按文件名内联
+    assert base64.b64encode(b"\xff\xd8\xffJPEGFAKE").decode() in site
+    assert 'src="lost.png"' in site  # 未命中原样保留
+    assert 'src="app.js"' in site and "https://x.cn/a.png" in site  # 非图片/远程引用不动

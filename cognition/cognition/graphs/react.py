@@ -41,6 +41,7 @@ def build_react_graph(
     history_policy: Optional["HistoryPolicy"] = None,
     expander=None,
     format_prompts: Optional[dict[str, str]] = None,
+    max_tool_calls: int = 0,
 ) -> CompiledStateGraph:
     """装配并编译 ReAct 图。
 
@@ -57,7 +58,11 @@ def build_react_graph(
     graph.add_node(
         "agent",
         make_think_node(
-            model, history_policy=history_policy, expander=expander, format_prompts=format_prompts
+            model,
+            history_policy=history_policy,
+            expander=expander,
+            format_prompts=format_prompts,
+            max_tool_calls=max_tool_calls,
         ),
     )
     graph.add_node("tools", ToolNode(list(tools), handle_tool_errors=_tool_error_message))

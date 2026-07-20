@@ -30,10 +30,17 @@ script_runner(
 - 中文排版：`font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif`；
   行高 1.6-1.8。
 
-## 配图（把生成的图放进网页）
+## 配图（把图放进网页——**任何本地图片都必须内联，禁止相对路径引用**）
 
-要在网页里放图：**先调 `image_generate` 生成**（它产出 `image-1.png`/`image-2.png`…），
-然后在 HTML 里用 **`<img src="generated/image-1.png">`** 引用——`render_page.py` 会把这类
-`src="generated/xxx"` 自动替换成内联 data-URI，产物区预览即可真正显示那张生成图（沙箱无网络，
-只有内联 data-URI 能显示）。文件名要与 image_generate 产出的一致（image-1.png 起编号）。
-不需要真实照片时，也可用纯 CSS 装饰/emoji/inline SVG 替代。
+沙箱预览 iframe 无网络凭据，页面里只有内联 data-URI 的图片能显示。两类图的正确写法
+（`render_page.py` 自动替换成 data-URI）：
+
+1. **生成图**：先调 `image_generate`（产出 `image-1.png`/`image-2.png`…），HTML 里用
+   **`<img src="generated/image-1.png">`** 引用（文件名须与产出一致，image-1.png 起编号）。
+2. **用户上传的图**（如原图对比场景）：`script_runner` 调用时必须传
+   **`input_files=["原图文件名.jpeg"]`**（文件名取本轮消息附件注记），HTML 里用
+   **`<img src="原图文件名.jpeg">`** 裸文件名引用。忘传 input_files 则无法内联，
+   渲染输出会打「警告: N 个本地图片引用未找到」——看到警告必须补上 input_files 重新渲染。
+
+绝不要在最终页面留下任何未内联的本地路径（`<img src="xxx.jpg">` 而文件不在沙箱内），
+那会让预览里图片空白、用户误判任务失败。不需要真实照片时，可用纯 CSS 装饰/emoji/inline SVG 替代。

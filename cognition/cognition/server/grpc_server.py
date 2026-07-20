@@ -110,14 +110,17 @@ async def serve(settings: Settings | None = None) -> None:
         react_model, react_tools, checkpointer=checkpointer,
         max_steps=settings.max_steps, history_policy=history_policy, expander=expander,
         format_prompts=settings.output_format_prompts,
+        max_tool_calls=settings.max_tool_calls_per_branch,
     )
 
     # Plan-Execute：executor 复用一套 ReAct 子图（无 checkpointer，分支级 thread 隔离）。
     # format_prompts 同样注入——executor 分支经 metadata spread 拿到 output_format。
+    # max_tool_calls 对每个分支独立生效（分支=一次子图执行，ToolMessage 计数从零起）。
     executor_subgraph = build_react_graph(
         executor_model, tools, max_steps=settings.max_steps,
         history_policy=history_policy, expander=expander,
         format_prompts=settings.output_format_prompts,
+        max_tool_calls=settings.max_tool_calls_per_branch,
     )
     plan_graph = build_plan_execute_graph(
         planner_model,

@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 
 from cognition.graphs.history import (
@@ -72,6 +72,7 @@ def make_think_node(
     history_policy: Optional[HistoryPolicy] = None,
     expander: Optional[Callable[[list], list]] = None,
     format_prompts: Optional[dict[str, str]] = None,
+    max_tool_calls: int = 0,
 ) -> Callable[[AgentState], dict]:
     """构造 think 节点（闭包注入模型）。
 
@@ -86,11 +87,18 @@ def make_think_node(
        见 history.IMAGE_CHAR_COST）；
     3. 若给定 expander，把 pro_attachment 引用块展开为真实内容（base64 图片/占位文本）
        ——放最后：裁剪按占位估价，展开后的大 base64 只活在本次模型调用里。
+
+    max_tool_calls：每次图执行（=每个研究/执行分支）的**工具调用硬预算**（0=不限）。
+    动机（实测）：DeepSeek 每轮并行发大量工具调用×研究分支数，曾单 run 961 次 web_fetch
+    把整轮拖到 RUN_TIMEOUT_S、烧穿 Tavily 免费额度与模型余额——提示词软约束收敛有限，
+    必须在节点层硬兜底。实现：已执行 ToolMessage 数达预算 → 前置「预算已尽」指令并以
+    `tool_choice="none"` 调用，模型只能基于已有信息收口（超发的并行调用最多溢出一轮）。
     """
 
     def think(state: AgentState, config: RunnableConfig = None) -> dict:  # type: ignore[assignment]
         step = int(state.get("step", 0))
         messages = repair_dangling_tool_calls(state["messages"])
+        used_tool_calls = sum(1 for m in messages if isinstance(m, ToolMessage))
         if history_policy is not None:
             messages = plan_history_reduction(messages, history_policy).messages
         if expander is not None:
@@ -100,7 +108,17 @@ def make_think_node(
         prefix = leading_prompt_from_config(config, format_prompts)
         if prefix:
             messages = [SystemMessage(content=prefix), *messages]
-        ai_msg = model.invoke(messages)
+        if max_tool_calls > 0 and used_tool_calls >= max_tool_calls:
+            budget_note = SystemMessage(
+                content=(
+                    f"工具调用预算已用尽（本任务已执行 {used_tool_calls} 次，上限 {max_tool_calls} 次）。"
+                    "禁止再调用任何工具。立即基于已获得的信息给出最终结论；"
+                    "信息不足之处如实说明，不要编造。"
+                )
+            )
+            ai_msg = model.invoke([budget_note, *messages], tool_choice="none")
+        else:
+            ai_msg = model.invoke(messages)
         return {"messages": [ai_msg], "step": step + 1}
 
     return think
