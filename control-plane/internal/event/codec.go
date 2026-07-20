@@ -1,12 +1,40 @@
 package event
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	agentv1 "my-agent/control-plane/internal/genproto/agent/v1"
 )
+
+// sanitizeNUL 把字符串里的 NUL（U+0000）替换为 U+FFFD。
+// PostgreSQL jsonb 不接受 \u0000 转义（22P05 unsupported Unicode escape sequence），
+// 而 web_fetch 抓到的页面偶含 NUL——不净化则单条事件毒死整个 run（实测 deep_research
+// 抓含 NUL 页面直接 FAILED）。在 FromProto 入口净化：实时推送与账本同源，replay ≡ live 保持。
+func sanitizeNUL(s string) string {
+	if !strings.ContainsRune(s, 0) {
+		return s
+	}
+	return strings.ReplaceAll(s, "\x00", "�")
+}
+
+func sanitizeNULs(in []string) []string {
+	for i, s := range in {
+		in[i] = sanitizeNUL(s)
+	}
+	return in
+}
+
+// sanitizeNULJSON 对已序列化 JSON 做同类净化（\u0000 → � 转义层替换）。
+// 用于 tool input 的 RawMessage 与 MarshalPayload 兜底。极端情况下用户正文里的
+// 字面量 `\u0000` 文本（JSON 里编码为 `\\u0000`）会被顺带替换成 `\\ufffd`——
+// 仅影响病态输入的显示，可接受。
+func sanitizeNULJSON(b []byte) []byte {
+	return bytes.ReplaceAll(b, []byte(`\u0000`), []byte(`�`))
+}
 
 // FromProto 把 gRPC 收到的 proto Event 转换为规范 Envelope。
 // seq 由 Python 分配，这里原样带入；Go 侧的单调/无空洞校验在 stream 层做。
@@ -28,19 +56,19 @@ func FromProto(p *agentv1.Event) (Envelope, error) {
 	switch payload := p.GetPayload().(type) {
 	case *agentv1.Event_ToolThought: // tool_thought 与 plan_thought 共用此槽
 		e.Thought = &ThoughtPayload{
-			Text:           payload.ToolThought.GetText(),
+			Text:           sanitizeNUL(payload.ToolThought.GetText()),
 			PlannerRoundID: payload.ToolThought.GetPlannerRoundId(),
 		}
 	case *agentv1.Event_Plan:
 		e.Plan = &PlanPayload{
-			Title:          payload.Plan.GetTitle(),
-			Steps:          payload.Plan.GetSteps(),
+			Title:          sanitizeNUL(payload.Plan.GetTitle()),
+			Steps:          sanitizeNULs(payload.Plan.GetSteps()),
 			StepStatus:     payload.Plan.GetStepStatus(),
-			Notes:          payload.Plan.GetNotes(),
+			Notes:          sanitizeNULs(payload.Plan.GetNotes()),
 			PlannerRoundID: payload.Plan.GetPlannerRoundId(),
 		}
 	case *agentv1.Event_Task:
-		e.Task = &TaskPayload{Text: payload.Task.GetText()}
+		e.Task = &TaskPayload{Text: sanitizeNUL(payload.Task.GetText())}
 	case *agentv1.Event_ToolCall:
 		tool, err := toolPayloadFromProto(payload.ToolCall)
 		if err != nil {
@@ -55,7 +83,7 @@ func FromProto(p *agentv1.Event) (Envelope, error) {
 		e.Tool = tool
 	case *agentv1.Event_Result:
 		e.Result = &ResultPayload{
-			Text:      payload.Result.GetText(),
+			Text:      sanitizeNUL(payload.Result.GetText()),
 			Artifacts: artifactsFromProto(payload.Result.GetArtifactRefs()),
 		}
 		if u := payload.Result.GetUsage(); u != nil && (u.GetInputTokens() != 0 || u.GetOutputTokens() != 0 || u.GetModelCalls() != 0) {
@@ -85,7 +113,7 @@ func toolPayloadFromProto(p *agentv1.ToolPayload) (*ToolPayload, error) {
 		if err != nil {
 			return nil, fmt.Errorf("event: marshal tool input: %w", err)
 		}
-		input = raw
+		input = sanitizeNULJSON(raw)
 	}
 	return &ToolPayload{
 		ToolCallID:    p.GetToolCallId(),
@@ -94,9 +122,9 @@ func toolPayloadFromProto(p *agentv1.ToolPayload) (*ToolPayload, error) {
 		Status:        toolStatusFromProto(p.GetStatus()),
 		DispatchIndex: p.GetDispatchIndex(),
 		Input:         input,
-		ToolResult:    p.GetToolResult(),
-		Summary:       p.GetSummary(),
-		ErrorMsg:      p.GetErrorMsg(),
+		ToolResult:    sanitizeNUL(p.GetToolResult()),
+		Summary:       sanitizeNUL(p.GetSummary()),
+		ErrorMsg:      sanitizeNUL(p.GetErrorMsg()),
 		Artifacts:     artifactsFromProto(p.GetArtifactRefs()),
 	}, nil
 }
@@ -274,20 +302,29 @@ func ToSSEFrame(e Envelope) ([]byte, error) {
 
 // MarshalPayload 序列化 Envelope 的活跃 payload，用于 events 表的 payload JSONB 列。
 // run_id/seq/type 等作为列单独存，故这里只存类型相关的 body。
+// 出口统一过 sanitizeNULJSON：FromProto 已净化主要来源，这里兜底其余生产者
+// （如 Approval.Input map 等未逐字段净化的路径），保证 jsonb 落库永不 22P05。
 func (e Envelope) MarshalPayload() ([]byte, error) {
+	marshal := func(v any) ([]byte, error) {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		return sanitizeNULJSON(b), nil
+	}
 	switch e.Type {
 	case TypeToolThought, TypePlanThought:
-		return json.Marshal(e.Thought)
+		return marshal(e.Thought)
 	case TypeToolCall, TypeToolResult:
-		return json.Marshal(e.Tool)
+		return marshal(e.Tool)
 	case TypeResult:
-		return json.Marshal(e.Result)
+		return marshal(e.Result)
 	case TypePlan:
-		return json.Marshal(e.Plan)
+		return marshal(e.Plan)
 	case TypeTask:
-		return json.Marshal(e.Task)
+		return marshal(e.Task)
 	case TypeApprovalRequest:
-		return json.Marshal(e.Approval)
+		return marshal(e.Approval)
 	default:
 		return nil, fmt.Errorf("event: cannot marshal payload for type %q", e.Type)
 	}
