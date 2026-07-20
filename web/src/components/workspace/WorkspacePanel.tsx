@@ -1,9 +1,9 @@
-// 智能体工作区：动态（时序 feed + 产物翻页预览）/ 文件（两段列表 + 预览）双页签。
+// 智能体工作区：动态（产物翻页预览 + 可拖拽分隔 + 时序 feed）/ 文件（Popover 选择器 + 全高预览）双页签。
 // focus 由外部（B5 集成：工具卡/来源 chip 点击）驱动：artifact → 切文件页签并选中；
 // sources → 切动态页签滚到对应组；消费后回调 onFocusConsumed()（父层清空，一次性）。
 // memo：ChatView 流式帧高频重渲，入参引用稳定时整个工作区（含 iframe/图表）不重渲。
 
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import type { ArtifactRef } from "../../lib/sse/frameTypes";
 import type { AttachmentRef } from "../../lib/api/client";
@@ -37,6 +37,9 @@ export const WorkspacePanel = memo(function WorkspacePanel({
   const onScrolled = useCallback(() => setScrollTo(null), []);
 
   // focus 变化：artifact → 文件页签+选中；sources → 动态页签+滚到组；随即消费。
+  // resourceKey 在 artifacts 与 uploads（消息气泡缩略图点击）全集中匹配：
+  // FilesTab 的查找集合就是 [artifacts, uploads]，两类 key 都能选中显示；
+  // 都找不到时 FilesTab 回落最新产物，页签切换仍成立。
   useEffect(() => {
     if (!focus) return;
     if (focus.kind === "artifact") {
@@ -48,6 +51,15 @@ export const WorkspacePanel = memo(function WorkspacePanel({
     }
     onFocusConsumed();
   }, [focus, onFocusConsumed]);
+
+  // resourceKey → 产出工具名（供文件选择器展示来源；activity 里 artifact 项自带 toolName）。
+  const toolNameByKey = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const it of activity) {
+      if (it.kind === "artifact" && it.toolName) m.set(it.art.resourceKey, it.toolName);
+    }
+    return m;
+  }, [activity]);
 
   // 新产物到达："生成即所见"，文件页签清手动选择回落最新（与 FilesPanel 同规则）。
   const prevLen = useRef(artifacts.length);
@@ -91,6 +103,7 @@ export const WorkspacePanel = memo(function WorkspacePanel({
             uploads={uploads}
             selectedKey={fileKey}
             onSelect={setFileKey}
+            toolNameByKey={toolNameByKey}
           />
         </TabsContent>
       </Tabs>

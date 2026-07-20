@@ -16,6 +16,7 @@ export interface UiPrefs {
   artifactsWidth: number;
   activeNav: NavView;
   theme: Theme;
+  workspaceSplit: number; // 工作区「动态」页预览区高度占比（预览/(预览+feed)）
 }
 
 export const ARTIFACTS_MIN_W = 320;
@@ -26,8 +27,23 @@ export function clampArtifactsWidth(w: number): number {
   return Math.min(ARTIFACTS_MAX_W, Math.max(ARTIFACTS_MIN_W, Math.round(w)));
 }
 
+export const WORKSPACE_SPLIT_MIN = 0.2;
+export const WORKSPACE_SPLIT_MAX = 0.9;
+export const WORKSPACE_SPLIT_DEFAULT = 0.55;
+
+export function clampWorkspaceSplit(v: number): number {
+  if (!Number.isFinite(v)) return WORKSPACE_SPLIT_DEFAULT;
+  return Math.min(WORKSPACE_SPLIT_MAX, Math.max(WORKSPACE_SPLIT_MIN, v));
+}
+
 // 浅色为新默认（对齐 claude.ai 奶油米观感）；历史用户无 theme 键 → 落到 light，一键可切回。
-const DEFAULTS: UiPrefs = { sidebarOpen: true, artifactsWidth: 384, activeNav: "chat", theme: "light" };
+const DEFAULTS: UiPrefs = {
+  sidebarOpen: true,
+  artifactsWidth: 384,
+  activeNav: "chat",
+  theme: "light",
+  workspaceSplit: WORKSPACE_SPLIT_DEFAULT,
+};
 
 export function loadUiPrefs(): UiPrefs {
   try {
@@ -39,6 +55,7 @@ export function loadUiPrefs(): UiPrefs {
       artifactsWidth: clampArtifactsWidth(parsed.artifactsWidth ?? DEFAULTS.artifactsWidth),
       activeNav: NAV_VIEWS.includes(parsed.activeNav as NavView) ? (parsed.activeNav as NavView) : "chat",
       theme: parsed.theme === "dark" ? "dark" : "light",
+      workspaceSplit: clampWorkspaceSplit(parsed.workspaceSplit ?? DEFAULTS.workspaceSplit),
     };
   } catch {
     return { ...DEFAULTS };

@@ -1,10 +1,13 @@
 // 工作区「动态」页签：顶部产物翻页器（驱动 ArtifactPreview）+ 下方时序 feed
 // （artifact 项 / web_search 来源组，图片项带缩略）。focus(sources) 由父层传 scrollTo 滚到对应组。
+// 预览/feed 之间为可拖拽分隔条（比例持久化 uiPrefs.workspaceSplit）；
+// 双击分隔条 = 预览最大化（feed 收起成摘要行，可点回）。
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BarChart3, ChevronLeft, ChevronRight, FileText, Globe, Image as ImageIcon } from "lucide-react";
 import type { ArtifactRef } from "../../lib/sse/frameTypes";
 import { sourceHostname } from "../../lib/sse/toolPayloads";
+import { clampWorkspaceSplit, loadUiPrefs, saveUiPrefs } from "../../lib/uiPrefs";
 import { isChartArtifact, type ActivityItem } from "../../lib/workspaceFeed";
 import { ArtifactPreview, useAuthedObjectUrl } from "../ArtifactWorkspace";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -119,6 +122,38 @@ export function ActivityTab({
     onScrolled();
   }, [scrollTo, onScrolled]);
 
+  // 预览/feed 分隔：split=预览占比（uiPrefs 持久化）；maximized=预览最大化（feed 收起成摘要行）。
+  const [split, setSplit] = useState(() => clampWorkspaceSplit(loadUiPrefs().workspaceSplit));
+  const [maximized, setMaximized] = useState(false);
+  const splitRef = useRef(split);
+  splitRef.current = split;
+  const containerRef = useRef<HTMLDivElement>(null);
+  // 拖拽：仿 ChatView 右 dock 宽度拖拽的 pointer 捕获模式，纵向变体（Δy/容器高 → 比例增量）。
+  const dragRef = useRef<{ startY: number; startSplit: number; height: number } | null>(null);
+  const onDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (maximized) return; // 最大化时无 feed 可分，仅响应双击恢复
+    e.preventDefault();
+    const height = containerRef.current?.getBoundingClientRect().height ?? 0;
+    if (height <= 0) return;
+    dragRef.current = { startY: e.clientY, startSplit: splitRef.current, height };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const onDragMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    if (e.buttons === 0) {
+      // 指针已松开却仍在移动（capture 被 pointercancel 抢走等）→ 结束，勿追踪裸悬停。
+      dragRef.current = null;
+      return;
+    }
+    setSplit(clampWorkspaceSplit(d.startSplit + (e.clientY - d.startY) / d.height)); // 向下拖=预览变高
+  };
+  const onDragEnd = () => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    saveUiPrefs({ ...loadUiPrefs(), workspaceSplit: splitRef.current });
+  };
+
   if (artifacts.length === 0 && activity.length === 0)
     return (
       <div className="flex h-full items-center justify-center p-6 text-center text-sm leading-relaxed text-muted-foreground">
@@ -126,10 +161,14 @@ export function ActivityTab({
       </div>
     );
 
+  const hasPreview = artifacts.length > 0;
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      {artifacts.length > 0 && (
-        <div className="flex min-h-0 flex-[3] flex-col border-b">
+    <div ref={containerRef} className="flex h-full min-h-0 flex-col">
+      {hasPreview && (
+        <div
+          className="flex min-h-0 flex-col"
+          style={{ flexGrow: maximized ? 1 : split, flexBasis: 0 }}
+        >
           <div
             data-testid="artifact-pager"
             className="flex items-center justify-center gap-1 border-b px-2 py-1"
@@ -159,34 +198,60 @@ export function ActivityTab({
           </div>
         </div>
       )}
-      <ScrollArea className="min-h-0 flex-[2]">
-        <div className="space-y-2 p-2">
-          {activity.map((item) =>
-            item.kind === "artifact" ? (
-              <ArtifactRow
-                key={item.art.resourceKey}
-                art={item.art}
-                toolName={item.toolName}
-                active={indexByKey.get(item.art.resourceKey) === current}
-                onClick={() => {
-                  const i = indexByKey.get(item.art.resourceKey);
-                  if (i != null) setIdx(i);
-                }}
-              />
-            ) : (
-              <div
-                key={item.toolCallId}
-                ref={(el) => {
-                  if (el) groupRefs.current.set(item.toolCallId, el);
-                  else groupRefs.current.delete(item.toolCallId);
-                }}
-              >
-                <SourcesGroup item={item} />
-              </div>
-            ),
-          )}
-        </div>
-      </ScrollArea>
+      {hasPreview && (
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="调整预览与动态高度（双击最大化预览）"
+          onPointerDown={onDragStart}
+          onPointerMove={onDragMove}
+          onPointerUp={onDragEnd}
+          onPointerCancel={onDragEnd}
+          onLostPointerCapture={onDragEnd}
+          onDoubleClick={() => setMaximized((m) => !m)}
+          className="h-1 shrink-0 touch-none cursor-row-resize bg-border/40 transition-colors select-none hover:bg-primary/50"
+        />
+      )}
+      {hasPreview && maximized ? (
+        <button
+          onClick={() => setMaximized(false)}
+          className="flex shrink-0 items-center gap-1 px-3 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+        >
+          {activity.length} 条动态 ▸
+        </button>
+      ) : (
+        <ScrollArea
+          className="min-h-0"
+          style={hasPreview ? { flexGrow: 1 - split, flexBasis: 0 } : { flexGrow: 1, flexBasis: 0 }}
+        >
+          <div className="space-y-2 p-2">
+            {activity.map((item) =>
+              item.kind === "artifact" ? (
+                <ArtifactRow
+                  key={item.art.resourceKey}
+                  art={item.art}
+                  toolName={item.toolName}
+                  active={indexByKey.get(item.art.resourceKey) === current}
+                  onClick={() => {
+                    const i = indexByKey.get(item.art.resourceKey);
+                    if (i != null) setIdx(i);
+                  }}
+                />
+              ) : (
+                <div
+                  key={item.toolCallId}
+                  ref={(el) => {
+                    if (el) groupRefs.current.set(item.toolCallId, el);
+                    else groupRefs.current.delete(item.toolCallId);
+                  }}
+                >
+                  <SourcesGroup item={item} />
+                </div>
+              ),
+            )}
+          </div>
+        </ScrollArea>
+      )}
     </div>
   );
 }
