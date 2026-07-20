@@ -32,8 +32,12 @@ type Run struct {
 	Status           string
 	FinalSummaryText *string
 	ErrorMsg         *string
-	CreatedAt        time.Time
-	FinishedAt       *time.Time
+	// Attachments 是本轮请求附带的附件引用数组（AttachmentRef JSON，原样落库原样返还，
+	// 供 GET /sessions/{id}/runs 回放还原用户气泡附件 chips 与工作区「上传内容」段）。
+	// nil=该轮无附件（列为 NULL）。
+	Attachments []byte
+	CreatedAt   time.Time
+	FinishedAt  *time.Time
 	// Inherited 不是 runs 表的列：ListRunsBySession 沿 fork 链上溯拼装 timeline 时，
 	// 祖先会话的继承段标 true（原 run_id 原事件，只读投影，回放端点零改动；docs/14 §4.2）。
 	Inherited bool
@@ -46,6 +50,9 @@ type CreateRunParams struct {
 	OwnerID    string
 	EntryAgent string
 	QueryText  string
+	// Attachments 是请求附带的附件引用数组的原始 JSON（api 层原样 marshal）；
+	// nil/空=无附件，写 NULL。headless 路径（scheduler/poller）恒传 nil。
+	Attachments []byte
 }
 
 // FinishRunParams 收口 run。FinalSummaryText/ErrorMsg 为空串时写入 NULL。
@@ -97,10 +104,16 @@ func (r *pgRunRepo) CreateRun(ctx context.Context, p CreateRunParams) error {
 	if entryAgent == "" {
 		entryAgent = "react"
 	}
+	// attachments NULL 安全：pgx 对 jsonb 参数把 nil []byte 编码为 SQL NULL；
+	// 空切片统一归一成 nil，杜绝空串写进 jsonb 报错。
+	atts := p.Attachments
+	if len(atts) == 0 {
+		atts = nil
+	}
 	_, err := r.pool.Exec(ctx, `
-		INSERT INTO runs (run_id, session_id, owner_id, entry_agent, query_text, status)
-		VALUES ($1, $2, $3, $4, $5, 'RUNNING')`,
-		p.RunID, p.SessionID, p.OwnerID, entryAgent, p.QueryText)
+		INSERT INTO runs (run_id, session_id, owner_id, entry_agent, query_text, status, attachments)
+		VALUES ($1, $2, $3, $4, $5, 'RUNNING', $6)`,
+		p.RunID, p.SessionID, p.OwnerID, entryAgent, p.QueryText, atts)
 	if err != nil {
 		return fmt.Errorf("store: create run: %w", err)
 	}
@@ -131,13 +144,13 @@ func (r *pgRunRepo) FinishRun(ctx context.Context, p FinishRunParams) error {
 // runColumns 是 Run 结构的 SELECT 列清单，与 scanRun 的字段顺序一一对应——
 // 加字段时两处同文件同步改，避免 GetRun / ListRunsBySession 各自漂移。
 const runColumns = `run_id, session_id, owner_id, entry_agent, query_text, status,
-       final_summary_text, error_msg, created_at, finished_at`
+       final_summary_text, error_msg, attachments, created_at, finished_at`
 
 // scanRun 按 runColumns 顺序扫描一行（QueryRow 的 Row 与 Query 的 Rows 均适用）。
 func scanRun(row interface{ Scan(dest ...any) error }) (Run, error) {
 	var run Run
 	err := row.Scan(&run.RunID, &run.SessionID, &run.OwnerID, &run.EntryAgent, &run.QueryText, &run.Status,
-		&run.FinalSummaryText, &run.ErrorMsg, &run.CreatedAt, &run.FinishedAt)
+		&run.FinalSummaryText, &run.ErrorMsg, &run.Attachments, &run.CreatedAt, &run.FinishedAt)
 	return run, err
 }
 

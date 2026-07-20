@@ -13,11 +13,15 @@ function headers(json = false): Record<string, string> {
 }
 
 // 已上传附件的引用（POST /uploads 的返回；run body 只带引用不带字节）。
+// previewUrl/downloadUrl：上传响应附带（均为 /artifacts/<resourceKey>），随 run 请求
+// 原样落库、GET /sessions/{id}/runs 原样返还（会话轮附件持久化）。
 export interface AttachmentRef {
   resourceKey: string;
   fileName: string;
   mimeType: string;
   size: number;
+  previewUrl?: string;
+  downloadUrl?: string;
 }
 
 export interface StartRunArgs {
@@ -166,6 +170,7 @@ export interface SessionRunMeta {
   errorMsg?: string;
   createdAt: string; // ISO 8601
   inherited?: boolean; // docs/14：继承自父会话的只读投影轮（原 runId，回放零改动）
+  attachments?: AttachmentRef[]; // 本轮请求附带的附件引用（落库返还；回放轮据此还原附件 chips/上传内容段）
 }
 
 // 会话内 run 元数据（created_at 升序）；事件仍走 GET /runs/{id}/events 逐 run 回放。

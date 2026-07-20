@@ -52,6 +52,10 @@ type StartCommand struct {
 	Query             string
 	AgentType         string // "react" | "plan_solve"
 	Attachments       []Attachment
+	// AttachmentsJSON 是请求体 attachments 数组的原始 JSON（api 层原样 marshal），
+	// 只为落库（runs.attachments，供会话回放还原附件 chips/上传内容段）；认知面仍走
+	// 上面的结构化 Attachments。headless 路径（scheduler/poller）不设置（nil=不落）。
+	AttachmentsJSON []byte
 }
 
 // Dispatcher 持有并发闸与运行时协作者。
@@ -120,6 +124,7 @@ func (d *Dispatcher) Run(ctx context.Context, cmd StartCommand, sink stream.Sink
 	}
 	if err := d.runs.CreateRun(ctx, store.CreateRunParams{
 		RunID: cmd.RunID, SessionID: cmd.SessionID, OwnerID: cmd.OwnerID, EntryAgent: agentType, QueryText: cmd.Query,
+		Attachments: cmd.AttachmentsJSON,
 	}); err != nil {
 		return err
 	}

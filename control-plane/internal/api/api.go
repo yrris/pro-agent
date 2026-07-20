@@ -156,6 +156,10 @@ type attachmentRef struct {
 	FileName    string `json:"fileName"`
 	MimeType    string `json:"mimeType"`
 	Size        int64  `json:"size"`
+	// 上传响应（uploadFile）的两个 URL 字段：前端把 /uploads 返回体原样塞进 run 请求，
+	// 这里显式声明才能在「原样 marshal 落库 → 回放返还」时不丢（会话轮附件持久化）。
+	PreviewURL  string `json:"previewUrl,omitempty"`
+	DownloadURL string `json:"downloadUrl,omitempty"`
 }
 
 type startRunRequest struct {
@@ -195,6 +199,17 @@ func (h *handlers) startRun(w http.ResponseWriter, r *http.Request) {
 		atts = append(atts, dispatch.Attachment{
 			ResourceKey: a.ResourceKey, FileName: a.FileName, MimeType: a.MimeType, Size: a.Size,
 		})
+	}
+	// 会话轮附件持久化：请求的 attachments 数组原样 marshal 落进 runs.attachments，
+	// GET /sessions/{id}/runs 原样返还（回放还原附件 chips/上传内容段）。无附件不落（NULL）。
+	var attsJSON []byte
+	if len(body.Attachments) > 0 {
+		b, err := json.Marshal(body.Attachments)
+		if err != nil { // attachmentRef 全平铺字段，实际不可达；防御性 500 而非静默丢账
+			writeProblem(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+		attsJSON = b
 	}
 
 	// docs/14 分叉播种触发：请求的会话是分叉登记的 → **每个 run 都附 fork 两键**，
@@ -239,7 +254,7 @@ func (h *handlers) startRun(w http.ResponseWriter, r *http.Request) {
 	h.streamRun(w, r, dispatch.StartCommand{
 		SessionID: sessionID, OwnerID: ownerID, Query: body.Query, AgentType: agentType, OutputFormat: body.OutputFormat, ImageGen: body.ImageGen,
 		ForkFromSessionID: forkFromSessionID, ForkFromRunID: forkFromRunID,
-		Attachments: atts,
+		Attachments: atts, AttachmentsJSON: attsJSON,
 	})
 }
 
@@ -547,6 +562,9 @@ type sessionRunJSON struct {
 	ErrorMsg     string    `json:"errorMsg,omitempty"`
 	CreatedAt    time.Time `json:"createdAt"`
 	Inherited    bool      `json:"inherited,omitempty"` // docs/14：继承自祖先会话的只读投影轮
+	// 本轮请求附带的附件引用数组（AttachmentRef JSON 原样返还；无附件省略）——
+	// 前端回放轮据此还原用户气泡附件 chips 与工作区「上传内容」段。
+	Attachments json.RawMessage `json:"attachments,omitempty"`
 }
 
 // listSessionRuns 返回会话内 run 元数据（created_at 升序）。owner 过滤在 SQL 里，
@@ -582,6 +600,9 @@ func (h *handlers) listSessionRuns(w http.ResponseWriter, r *http.Request) {
 		j := sessionRunJSON{
 			RunID: run.RunID, Query: run.QueryText, AgentType: run.EntryAgent,
 			Status: run.Status, CreatedAt: run.CreatedAt, Inherited: run.Inherited,
+		}
+		if len(run.Attachments) > 0 {
+			j.Attachments = json.RawMessage(run.Attachments)
 		}
 		if run.FinalSummaryText != nil {
 			j.FinalSummary = *run.FinalSummaryText

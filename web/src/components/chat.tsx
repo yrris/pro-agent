@@ -21,6 +21,7 @@ import type {
 } from "../lib/sse/frameTypes";
 import { Collapsible, Markdown } from "./common";
 import { ToolRow } from "./ToolRow";
+import { useAuthedObjectUrl } from "./ArtifactWorkspace";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -264,17 +265,61 @@ export function ApprovalCard({
   );
 }
 
-// 发送轮的附件 chips（挂在用户气泡下方；历史回放轮无附件元数据=已知限制）。
-function AttachmentRow({ attachments }: { attachments?: AttachmentRef[] }) {
+// 图片附件的缩略图卡：/artifacts/<resourceKey> 带头 fetch 成 blob（裸 <img src> 无法带
+// X-User-Id，登入用户必 403），点击交给工作区 focus（onOpenArtifact 与工具产物同一回调）。
+// 单独成组件：useAuthedObjectUrl 是 hook，不能在 AttachmentRow 的 map 里直接调。
+function AttachmentThumb({
+  att,
+  onOpen,
+}: {
+  att: AttachmentRef;
+  onOpen?: (resourceKey: string) => void;
+}) {
+  const objUrl = useAuthedObjectUrl(`/artifacts/${att.resourceKey}`, true);
+  return (
+    <button
+      type="button"
+      title={att.fileName}
+      onClick={() => onOpen?.(att.resourceKey)}
+      className="group overflow-hidden rounded-lg border transition-shadow hover:shadow-md"
+    >
+      {objUrl ? (
+        <img
+          src={objUrl}
+          alt={att.fileName}
+          className="h-20 w-auto max-w-40 object-cover transition-transform duration-200 group-hover:scale-[1.04]"
+        />
+      ) : (
+        <span className="flex h-20 w-24 items-center justify-center bg-secondary">
+          <Paperclip className="size-4 text-muted-foreground" />
+        </span>
+      )}
+    </button>
+  );
+}
+
+// 发送轮的附件行（挂在用户气泡下方；实时轮与历史回放轮同源渲染——附件元数据已随 run 落库返还）。
+// image/* 升级为缩略图卡，其余保持文件名 chip。
+function AttachmentRow({
+  attachments,
+  onOpenArtifact,
+}: {
+  attachments?: AttachmentRef[];
+  onOpenArtifact?: (resourceKey: string) => void;
+}) {
   if (!attachments?.length) return null;
   return (
     <div className="flex flex-wrap justify-end gap-1.5">
-      {attachments.map((a) => (
-        <Badge key={a.resourceKey} variant="outline" className="gap-1 font-normal text-muted-foreground">
-          <Paperclip className="size-3" />
-          <span className="max-w-40 truncate">{a.fileName}</span>
-        </Badge>
-      ))}
+      {attachments.map((a) =>
+        a.mimeType?.startsWith("image/") ? (
+          <AttachmentThumb key={a.resourceKey} att={a} onOpen={onOpenArtifact} />
+        ) : (
+          <Badge key={a.resourceKey} variant="outline" className="gap-1 font-normal text-muted-foreground">
+            <Paperclip className="size-3" />
+            <span className="max-w-40 truncate">{a.fileName}</span>
+          </Badge>
+        ),
+      )}
     </div>
   );
 }
@@ -394,7 +439,7 @@ export const MessageList = memo(function MessageList({
   return (
     <div className="space-y-3">
       {query && <UserBubble text={query} />}
-      <AttachmentRow attachments={attachments} />
+      <AttachmentRow attachments={attachments} onOpenArtifact={onOpenArtifact} />
       {nodes}
       {state.unknown.length > 0 && (
         <div className="text-xs text-muted-foreground">

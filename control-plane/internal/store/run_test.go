@@ -78,6 +78,56 @@ func TestListAllRunsPagedTieBreaker(t *testing.T) {
 	}
 }
 
+// 会话轮附件持久化：CreateRun 带 attachments JSON → SessionRuns（ListRunsBySession）取回
+// 逐字节一致；nil 附件（headless/无附件轮）取回应为 nil。
+// jsonb 会把文本规范化（对象键短→长、同长按字节序重排；`": "`/`", "` 定格间隔），
+// 故输入直接按该规范形书写，字节等价断言才成立；任意键序的语义等价由 jsonSemEqual 双保险。
+func TestRunAttachmentsRoundtrip(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	runs := store.NewRunRepository(pool)
+	sessions := store.NewSessionRepository(pool)
+
+	// 键序即 jsonb 输出序：size(4) < fileName(8) < mimeType(8) < previewUrl(10) < downloadUrl(11) < resourceKey(11)。
+	att := []byte(`[{"size": 7, "fileName": "cat.png", "mimeType": "image/png", "previewUrl": "/artifacts/uploads/o1/s-att/ab/cat.png", "downloadUrl": "/artifacts/uploads/o1/s-att/ab/cat.png", "resourceKey": "uploads/o1/s-att/ab/cat.png"}]`)
+	if err := runs.CreateRun(ctx, store.CreateRunParams{
+		RunID: "run-att-1", SessionID: "s-att", OwnerID: "o1", QueryText: "带附件的一轮", Attachments: att,
+	}); err != nil {
+		t.Fatalf("CreateRun with attachments: %v", err)
+	}
+	if err := runs.CreateRun(ctx, store.CreateRunParams{
+		RunID: "run-att-2", SessionID: "s-att", OwnerID: "o1", QueryText: "无附件的一轮",
+	}); err != nil {
+		t.Fatalf("CreateRun nil attachments: %v", err)
+	}
+
+	got, err := sessions.ListRunsBySession(ctx, "o1", "s-att")
+	if err != nil {
+		t.Fatalf("ListRunsBySession: %v", err)
+	}
+	if ids := runIDs(got); len(got) != 2 || ids[0] != "run-att-1" || ids[1] != "run-att-2" {
+		t.Fatalf("timeline 应为 [run-att-1 run-att-2]，得 %v", ids)
+	}
+	if !jsonSemEqual(t, got[0].Attachments, att) {
+		t.Errorf("attachments 语义漂移\n got: %s\nwant: %s", got[0].Attachments, att)
+	}
+	if string(got[0].Attachments) != string(att) {
+		t.Errorf("attachments 非逐字节一致\n got: %s\nwant: %s", got[0].Attachments, att)
+	}
+	if got[1].Attachments != nil {
+		t.Errorf("无附件轮应取回 nil attachments，得 %s", got[1].Attachments)
+	}
+
+	// GetRun 与 SessionRuns 共用 runColumns/scanRun：单查同样带回 attachments。
+	one, err := runs.GetRun(ctx, "run-att-1")
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if !jsonSemEqual(t, one.Attachments, att) {
+		t.Errorf("GetRun attachments 漂移: %s", one.Attachments)
+	}
+}
+
 // #10：微秒精度 created_at 在同一毫秒内的多 run，用全精度复合游标不丢
 // （admin.go 的毫秒截断是 API 层的另一半，本层保证收到全精度 before 时正确接续）。
 func TestListAllRunsPagedSubMillisecond(t *testing.T) {
