@@ -110,10 +110,11 @@ RESEARCH_PLANNER_SYSTEM = (
     "拿候选来源，关键来源用 web_fetch 深读原文，知识库检索用 knowledge_search。"
     "同一步骤内可并行的检索用字面量 <sep> 分隔。\n"
     "{{sop}}\n"
-    "计划必须是**至少 3 步**的固定骨架：① 广度检索步——把调研面用 <sep> 拆成 2~4 个"
+    "计划固定为 **3~4 步、不得超过 4 步**：① 广度检索步——把调研面用 <sep> 拆成 2~4 个"
     "并行子任务（禁止把整个调研塞进一个子任务）；② 交叉验证/补缺步——针对首轮结果的"
-    "缺口与关键论断补充检索；③ 汇总步——整合全部证据、点名用 write_report 工具产出"
-    "最终研究报告文件。\n"
+    "缺口与关键论断补充检索；③（可选）单一主题针对性深挖；④ 汇总步——整合全部证据、"
+    "点名用 write_report 工具产出最终研究报告文件。执行预算有限：步数超过 4 或反复"
+    "replan 会导致任务被强制截断，宁可每步做实。\n"
     "硬性要求：每个步骤必须自包含（执行者看不到对话历史，禁止「上面/之前」等指代，"
     "要查的问题与期望证据写进步骤文本）；**子任务粒度要小而聚焦**——单个子任务只覆盖"
     "1~2 个主题、约 2~3 次搜索能完成（每分支有执行时限，塞太多主题会超时作废）；"
@@ -327,6 +328,7 @@ class PlanExecuteState(TypedDict, total=False):
     reduced_state: str   # 上一轮并行归约结果（ERROR/IDLE/FINISHED）
     output_format: str   # M9：per-run 输出格式（planner system 拼接；镜像 sop 的注入模式）
     image_gen: bool      # B.4：生图开关（planner system 拼接生图引导）
+    branches_used: int   # 已派发的执行分支累计数（全局分支预算，防步数×并行爆炸）
     planner_messages: Annotated[list, add_messages]
     sub_results: Annotated[list[SubResult], merge_sub_results]
 
@@ -410,6 +412,7 @@ def build_plan_execute_graph(
     checkpointer: Optional[BaseCheckpointSaver] = None,
     planner_system: str = PLANNER_SYSTEM,
     format_prompts: Optional[dict[str, str]] = None,
+    max_total_branches: int = 0,
 ) -> CompiledStateGraph:
     """装配并编译 Plan-Execute 图。
 
@@ -481,6 +484,7 @@ def build_plan_execute_graph(
             dispatch_round = rnd  # 首轮 dispatch round = 当前 round（默认 0）
         else:
             this_round = results_for_round(sub_results, state.get("request_id", ""), rnd)
+            completed_branches = len(this_round)  # 全局分支预算的计数来源（实际完成数）
             reduced = reduce_substate(this_round)
             note = _join_results(this_round)
             human = HumanMessage(content=f"上一轮执行结果：\n{note}\n请审视并推进计划。")
@@ -518,6 +522,8 @@ def build_plan_execute_graph(
         }
         if reduced is not None:
             updates["reduced_state"] = reduced
+            # replan 路径：累计上一轮实际完成的分支数（route 据此执行全局分支预算）。
+            updates["branches_used"] = int(state.get("branches_used", 0)) + completed_branches
         return updates
 
     # ---- executor：信号量限宽 + 超时；复用 ReAct 子图跑单个子任务 ----
@@ -615,7 +621,7 @@ def build_plan_execute_graph(
         return {}
 
     def route_after_planner(state: PlanExecuteState):
-        return _route_after_planner(state, max_steps)
+        return _route_after_planner(state, max_steps, max_total_branches)
 
     graph = StateGraph(PlanExecuteState)
     graph.add_node("sop_recall", sop_recall)
@@ -635,8 +641,13 @@ def build_plan_execute_graph(
 # ——————————————————————————————————————————————————————————————
 # 路由（纯函数，便于单测）
 # ——————————————————————————————————————————————————————————————
-def _route_after_planner(state: PlanExecuteState, max_steps: int):
-    """planner 之后的条件路由：完成/超步/ERROR → summary；否则按 <sep> 扇出 Send。"""
+def _route_after_planner(state: PlanExecuteState, max_steps: int, max_total_branches: int = 0):
+    """planner 之后的条件路由：完成/超步/ERROR/分支预算尽 → summary；否则按 <sep> 扇出 Send。
+
+    max_total_branches（0=不限）：**全局**分支预算。每分支的工具调用已有 40 次硬预算，
+    但实测 planner 可产出 8 步计划 × 每步多子任务 × replan → 总分支 30+，
+    总调用仍爆到 1400+（拖满 RUN_TIMEOUT、烧穿搜索额度）——步数×并行的乘积必须再设一道闸。
+    """
     plan = state.get("plan")
     rnd = int(state.get("round", 0))
 
@@ -648,6 +659,9 @@ def _route_after_planner(state: PlanExecuteState, max_steps: int):
         return "summary"
 
     subs = current_step(plan).split(SEP)
+    used = int(state.get("branches_used", 0))
+    if max_total_branches > 0 and used + len(subs) > max_total_branches:
+        return "summary"  # 再派发就超全局预算：基于已有 sub_results 收口
     # 会话背景摘要：executor 分支与会话历史隔离，续聊里"整理上面内容"类任务
     # 靠它拿到指代对象（同一轮各分支共享同一份摘要）。
     digest = build_context_digest(state.get("planner_messages"))
@@ -671,9 +685,9 @@ def _route_after_planner(state: PlanExecuteState, max_steps: int):
 
 
 # 公开别名（供测试导入）。
-def route_after_planner(state: PlanExecuteState, max_steps: int = 5):
-    """对外的路由纯函数（默认 max_steps=5）。"""
-    return _route_after_planner(state, max_steps)
+def route_after_planner(state: PlanExecuteState, max_steps: int = 5, max_total_branches: int = 0):
+    """对外的路由纯函数（默认 max_steps=5、分支预算不限）。"""
+    return _route_after_planner(state, max_steps, max_total_branches)
 
 
 # ——————————————————————————————————————————————————————————————

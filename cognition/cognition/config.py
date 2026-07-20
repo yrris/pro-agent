@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     # 实测 DeepSeek 并行多调用×分支数可爆到单 run 961 次 web_fetch：拖满 RUN_TIMEOUT、
     # 烧穿搜索额度与模型余额——达预算后 think 以 tool_choice="none" 强制收口。
     max_tool_calls_per_branch: int = Field(default=40, ge=0)
+    # plan/research 单 run 的**全局**分支预算（0=不限）。分支级预算挡不住
+    # 「8 步计划×每步多子任务×replan」的乘积（实测 30+ 分支、1400+ 次调用仍超时）——
+    # 累计派发分支达上限后 route 直接转 summary 基于已有结果收口。
+    max_total_branches: int = Field(default=8, ge=0)
 
     # —— HITL 人工审批（M11）——
     # 受保护工具名列表（COGNITION_APPROVAL_TOOLS='["script_runner"]'）；默认空=关闭。

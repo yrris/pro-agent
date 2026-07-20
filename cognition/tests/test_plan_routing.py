@@ -204,3 +204,17 @@ async def test_branch_guarded_finish_hook_observes_timeout():
             asyncio.Semaphore(1), 0.001, slow, on_finish=finished
         )
     assert len(seen) == 1 and isinstance(seen[0], asyncio.TimeoutError)
+
+
+def test_route_summary_when_global_branch_budget_exhausted():
+    """全局分支预算：累计派发分支 + 本轮待派发 > 上限 → 直接 summary 收口。
+    背景：分支级 40 次工具预算挡不住 8 步计划×多子任务×replan 的乘积
+    （实测 30+ 分支 1400+ 次调用仍拖满 RUN_TIMEOUT）。"""
+    from cognition.graphs.plan_lifecycle import create
+
+    plan = create("t", ["a<sep>b<sep>c", "后续"])
+    state = {"plan": plan, "round": 1, "branches_used": 6}
+    assert route_after_planner(state, max_steps=5, max_total_branches=8) == "summary"  # 6+3>8
+    sends = route_after_planner(state, max_steps=5, max_total_branches=9)  # 6+3<=9 → 正常扇出
+    assert isinstance(sends, list) and len(sends) == 3
+    assert route_after_planner({**state, "branches_used": 0}, max_steps=5, max_total_branches=0) != "summary"  # 0=不限

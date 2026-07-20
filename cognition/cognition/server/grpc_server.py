@@ -133,6 +133,7 @@ async def serve(settings: Settings | None = None) -> None:
         react_recursion_limit=2 * settings.max_steps + 5,
         checkpointer=checkpointer,
         format_prompts=settings.output_format_prompts,
+        max_total_branches=settings.max_total_branches,
     )
     # deep_research：同拓扑第二编译图（研究提示词 + 更高轮次预算，executor 子图共享）。
     from cognition.graphs.plan_execute import RESEARCH_PLANNER_SYSTEM
@@ -149,6 +150,7 @@ async def serve(settings: Settings | None = None) -> None:
         checkpointer=checkpointer,
         planner_system=RESEARCH_PLANNER_SYSTEM,
         format_prompts=settings.output_format_prompts,
+        max_total_branches=settings.max_total_branches,
     )
 
     # 仅 otel_enabled 且 SDK 可用时挂 aio server 拦截器（从 metadata 提取 traceparent
