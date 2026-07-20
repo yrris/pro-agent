@@ -20,8 +20,12 @@ export const OUTPUT_FORMATS = [
 
 export const HEALTH_POLL_MS = 30_000;
 
+// 首屏建议问题：每条映射一项真实能力（深度研究检索报告 / GitHub 调研 / 图表 / 生图 / 文档），
+// 展示态（截图）与日常演示共用。e2e 不再依赖此列表（helpers.sendMessage 直接输入）。
 export const SAMPLE_QUESTIONS = [
-  "帮我算一下 2*(3+4) 等于多少",
-  "写一份关于本周进展的简短报告",
-  "什么是混合检索和 RRF？（需开启知识库）",
+  "围绕「2026 年国产大模型 Agent 落地」做一份带引用来源的调研报告",
+  "分析 GitHub 上 langchain-ai/langgraph 项目的架构，输出网页版报告",
+  "搜索近五年中国新能源汽车渗透率数据，用图表对比展示",
+  "生成一张水彩风格的江南水乡海报",
+  "帮我规划一个成都三日游行程，输出成文档",
 ];

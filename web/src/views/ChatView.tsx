@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, GitBranch, ImagePlus, Loader2, PanelRight, Paperclip, RotateCw, Square, X } from "lucide-react";
+import { ArrowUp, Check, GitBranch, ImagePlus, Loader2, PanelRight, Paperclip, RotateCw, Square, TriangleAlert, X } from "lucide-react";
 import { MessageList } from "../components/chat";
-import { FilesPanel } from "../components/FilesPanel";
+import { Hero } from "../components/Hero";
+import { WorkspacePanel, type WorkspaceFocus } from "../components/workspace/WorkspacePanel";
+import { buildActivityFeed } from "../lib/workspaceFeed";
 import type { ArtifactRef } from "../lib/sse/frameTypes";
 import type { RunStatus, RunTurn } from "../hooks/useRunStream";
-import { AGENT_TYPES, OUTPUT_FORMATS, SAMPLE_QUESTIONS } from "../config";
+import { AGENT_TYPES, OUTPUT_FORMATS } from "../config";
 import { uploadFileWithProgress, type AttachmentRef } from "../lib/api/client";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,7 +38,7 @@ function ProgressRing({ pct }: { pct: number }) {
   const c = 2 * Math.PI * r;
   return (
     <svg viewBox="0 0 24 24" className="size-5 -rotate-90">
-      <circle cx="12" cy="12" r={r} fill="none" strokeWidth="2.5" className="stroke-stone-600/40" />
+      <circle cx="12" cy="12" r={r} fill="none" strokeWidth="2.5" className="stroke-border" />
       <circle
         cx="12"
         cy="12"
@@ -70,15 +72,15 @@ function AttachmentChips({
           <div
             key={a.id}
             className={`group relative flex items-center gap-2 rounded-lg border py-1.5 pl-1.5 pr-7 ${
-              err ? "border-rose-500/40 bg-rose-500/5" : "border-border bg-card"
+              err ? "border-destructive/40 bg-destructive/5" : "border-border bg-card"
             }`}
           >
             {/* 缩略图（图片）或文件角标；上传中盖一层进度圆环，完成盖绿对勾 */}
-            <div className="relative flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-black/20">
+            <div className="relative flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-accent/60">
               {a.previewUrl ? (
                 <img src={a.previewUrl} alt={a.file.name} className="size-full object-cover" />
               ) : (
-                <span className="text-[9px] uppercase text-stone-400">
+                <span className="text-[9px] uppercase text-muted-foreground">
                   {(a.file.name.split(".").pop() || "file").slice(0, 4)}
                 </span>
               )}
@@ -89,15 +91,15 @@ function AttachmentChips({
               )}
               {a.status === "done" && (
                 <div className="absolute right-0 bottom-0 rounded-full bg-background/80 p-0.5">
-                  <Check className="size-3 text-emerald-400" />
+                  <Check className="size-3 text-success" />
                 </div>
               )}
             </div>
             <div className="min-w-0">
-              <div className={`max-w-36 truncate text-xs ${err ? "text-rose-300" : "text-stone-200"}`}>
+              <div className={`max-w-36 truncate text-xs ${err ? "text-destructive" : "text-foreground"}`}>
                 {a.file.name}
               </div>
-              <div className="text-[10px] text-stone-500">
+              <div className="text-[10px] text-muted-foreground/70">
                 {a.status === "uploading"
                   ? `上传中 ${Math.round(a.progress * 100)}%`
                   : err
@@ -109,7 +111,7 @@ function AttachmentChips({
               <button
                 onClick={() => onRetry(a.id)}
                 title="重试"
-                className="absolute right-7 top-1/2 -translate-y-1/2 rounded p-1 text-rose-300 hover:text-rose-100"
+                className="absolute right-7 top-1/2 -translate-y-1/2 rounded p-1 text-destructive hover:text-destructive/75"
               >
                 <RotateCw className="size-3" />
               </button>
@@ -117,7 +119,7 @@ function AttachmentChips({
             <button
               onClick={() => onRemove(a.id)}
               title="移除"
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-stone-500 hover:text-stone-200"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground/70 hover:text-foreground"
             >
               <X className="size-3.5" />
             </button>
@@ -202,7 +204,7 @@ function Composer({
     <div className="px-4 pb-4">
       {/* UX-1 胶囊 Composer（对齐 Claude 官网）：圆角卡片内 输入区 + 底部控制行；
           模式/格式选择器内嵌于此（顶栏精简）。IME Enter 守卫原样保留。 */}
-      <div className="mx-auto max-w-3xl rounded-2xl border bg-card shadow-lg transition-colors focus-within:border-stone-500/60">
+      <div className="mx-auto max-w-3xl rounded-3xl border bg-card shadow-sm transition-all focus-within:border-primary/40 focus-within:shadow-md">
         <div className="px-3 pt-2">
           <AttachmentChips
             items={atts}
@@ -252,7 +254,7 @@ function Composer({
             title="上传附件（图片进多模态；文本/PDF 自动入个人知识库可检索）"
             disabled={disabled}
             onClick={() => fileRef.current?.click()}
-            className="text-stone-400 hover:text-foreground"
+            className="text-muted-foreground hover:text-foreground"
           >
             <Paperclip />
           </Button>
@@ -263,7 +265,7 @@ function Composer({
             title={imageGen ? "生图已开启（再点关闭）" : "开启生图：本轮用文字/上传图生成图片"}
             aria-pressed={imageGen}
             onClick={() => setImageGen((v) => !v)}
-            className={imageGen ? "text-primary hover:text-primary" : "text-stone-400 hover:text-foreground"}
+            className={imageGen ? "text-primary hover:text-primary" : "text-muted-foreground hover:text-foreground"}
           >
             <ImagePlus />
           </Button>
@@ -273,7 +275,7 @@ function Composer({
               size="sm"
               disabled={agentType === "react" && !imageGen}
               title={agentType === "react" && !imageGen ? "快速模式不指定输出格式（开启生图后可选）" : "输出格式"}
-              className="w-24 shrink-0 border-0 bg-transparent text-stone-400 shadow-none hover:text-foreground"
+              className="w-fit shrink-0 border-0 bg-transparent text-muted-foreground shadow-none hover:text-foreground"
             >
               <SelectValue />
             </SelectTrigger>
@@ -290,7 +292,7 @@ function Composer({
               <SelectTrigger
                 size="sm"
                 title="推理模式"
-                className="w-fit border-0 bg-transparent text-stone-400 shadow-none hover:text-foreground"
+                className="w-fit border-0 bg-transparent text-muted-foreground shadow-none hover:text-foreground"
               >
                 <SelectValue />
               </SelectTrigger>
@@ -307,7 +309,7 @@ function Composer({
                 onClick={onStop}
                 size="icon"
                 title="停止生成"
-                className="rounded-xl bg-stone-700 text-stone-100 hover:bg-stone-600"
+                className="rounded-full bg-foreground/85 text-background hover:bg-foreground/70"
               >
                 <Square className="fill-current" />
               </Button>
@@ -317,7 +319,7 @@ function Composer({
                 disabled={disabled || uploading}
                 size="icon"
                 title={uploading ? "附件上传中…" : "发送（Enter）"}
-                className="rounded-xl bg-primary text-primary-foreground hover:bg-primary/85"
+                className="rounded-full bg-primary text-primary-foreground hover:bg-primary/85"
               >
                 {uploading ? <Loader2 className="animate-spin" /> : <ArrowUp />}
               </Button>
@@ -414,8 +416,36 @@ export function ChatView({
     prevLiveRef.current = liveCount;
   }, [liveCount, artifactsOpen, onArtifactsOpenChange]);
 
-  // onClose 稳定引用：否则内联箭头每帧重建 → FilesPanel 的 memo 失效、流式期每帧重渲。
+  // onClose 稳定引用：否则内联箭头每帧重建 → WorkspacePanel 的 memo 失效、流式期每帧重渲。
   const closeArtifacts = useCallback(() => onArtifactsOpenChange(false), [onArtifactsOpenChange]);
+
+  // 智能体工作区「动态」feed：搜索来源组 + 产物时序。依赖数组标识（reducer 仅在
+  // tool_result/产物帧替换 toolResults/artifacts 数组），token 帧不触发重算。
+  const liveToolResults = live?.state.toolResults;
+  const liveState = live?.state;
+  const activity = useMemo(
+    () => buildActivityFeed([...timeline.map((t) => t.state), ...(liveState ? [liveState] : [])]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- liveState 每帧换标识，仅在关键数组换时重算
+    [timeline, liveArtifacts, liveToolResults],
+  );
+
+  // ToolRow → 工作区联动：查看来源切「动态」tab、查看产物切「文件」tab（并确保 dock 打开）。
+  const [wsFocus, setWsFocus] = useState<WorkspaceFocus | null>(null);
+  const openSources = useCallback(
+    (toolCallId: string) => {
+      setWsFocus({ kind: "sources", toolCallId });
+      onArtifactsOpenChange(true);
+    },
+    [onArtifactsOpenChange],
+  );
+  const openArtifact = useCallback(
+    (resourceKey: string) => {
+      setWsFocus({ kind: "artifact", resourceKey });
+      onArtifactsOpenChange(true);
+    },
+    [onArtifactsOpenChange],
+  );
+  const consumeFocus = useCallback(() => setWsFocus(null), []);
 
   // 面板宽度拖拽（左缘把手）：pointer 捕获 + 实时回写（App 端 clamp+持久化）。
   const dragRef = useRef<{ startX: number; startW: number } | null>(null);
@@ -442,7 +472,7 @@ export function ChatView({
   const placeholder = loadingHistory
     ? "正在载入历史会话…"
     : status === "running"
-      ? "运行中…完成后可继续提问"
+      ? "任务进行中…完成后可继续提问"
       : "输入问题，Enter 发送，Shift+Enter 换行（历史会话可直接继续对话）";
 
   const dockCount = artifacts.length + uploads.length;
@@ -458,8 +488,8 @@ export function ChatView({
                   variant="ghost"
                   size="icon"
                   onClick={() => onArtifactsOpenChange(true)}
-                  aria-label="打开产物与上传内容"
-                  className="relative size-8 text-stone-400 hover:text-foreground"
+                  aria-label="打开智能体工作区"
+                  className="relative size-8 text-muted-foreground hover:text-foreground"
                 >
                   <PanelRight />
                   {dockCount > 0 && (
@@ -469,29 +499,13 @@ export function ChatView({
                   )}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>本对话的产物与上传内容</TooltipContent>
+              <TooltipContent>智能体工作区</TooltipContent>
             </Tooltip>
           </div>
         )}
         <div ref={scrollRef} className="flex-1 overflow-auto p-4">
           {empty ? (
-            <div className="mx-auto mt-24 max-w-md text-center">
-              <div className="mb-3 text-3xl text-primary">✳</div>
-              <div className="mb-1 text-xl font-medium text-foreground">有什么可以帮上忙？</div>
-              <div className="mb-5 text-sm text-stone-500">试试：</div>
-              <div className="space-y-2">
-                {SAMPLE_QUESTIONS.map((q) => (
-                  <Button
-                    key={q}
-                    variant="outline"
-                    onClick={() => onSubmit(q)}
-                    className="block h-auto w-full px-3 py-2 text-left text-sm font-normal text-stone-300"
-                  >
-                    {q}
-                  </Button>
-                ))}
-              </div>
-            </div>
+            <Hero onAsk={(q) => onSubmit(q)} />
           ) : (
             <div className="mx-auto max-w-3xl">
               {timeline.map((turn, i) => {
@@ -503,7 +517,7 @@ export function ChatView({
                   <div key={turn.runId} className="group/turn mb-6">
                     {turn.inherited && (
                       <div
-                        className="mb-1 flex items-center gap-1 text-[10px] text-stone-500"
+                        className="mb-1 flex items-center gap-1 text-[10px] text-muted-foreground/70"
                         title="继承自父会话的历史轮（只读投影，原轮原事件）"
                       >
                         <GitBranch className="size-3" />
@@ -515,13 +529,16 @@ export function ChatView({
                       query={turn.query}
                       attachments={turn.attachments}
                       inherited={turn.inherited}
+                      onOpenSources={openSources}
+                      onOpenArtifact={openArtifact}
                       // docs/14 §4.4：审批决议属于父会话时间线。继承轮的 pending 审批卡若可
                       // 操作，决议 run 会落回父会话（分叉视图刷新后消失）——继承轮一律只读。
                       onApprovalDecision={i === timeline.length - 1 && !live && !turn.inherited ? onApprovalDecision : undefined}
                     />
                     {turn.failed && (
-                      <div className="mt-1 text-xs text-amber-400">
-                        ⚠ 此轮未走到终态（中断/出错/仍在运行），仅展示已落库部分
+                      <div className="mt-1 flex items-center gap-1 text-xs text-warning">
+                        <TriangleAlert className="size-3.5 shrink-0" />
+                        此轮未走到终态（中断/出错/仍在运行），仅展示已落库部分
                       </div>
                     )}
                     {/* hover 操作区：从此轮分叉（继承轮同样可为锚——"分叉的分叉"）。 */}
@@ -531,7 +548,7 @@ export function ChatView({
                           data-testid="fork-turn"
                           title="从此轮分叉"
                           onClick={() => onForkTurn(turn.runId)}
-                          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-stone-500 hover:bg-accent/60 hover:text-foreground"
+                          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground/70 hover:bg-accent/60 hover:text-foreground"
                         >
                           <GitBranch className="size-3.5" />
                           从此轮分叉
@@ -542,31 +559,55 @@ export function ChatView({
                     {turn.inherited && !timeline[i + 1]?.inherited && (
                       <div
                         data-testid="fork-divider"
-                        className="mt-5 flex items-center gap-2 text-[11px] text-stone-500"
+                        className="mt-5 flex items-center gap-2 text-[11px] text-muted-foreground/70"
                       >
                         <div className="h-px flex-1 bg-border" />
-                        <span>⑂ 从此处分叉</span>
+                        <span className="flex items-center gap-1">
+                          <GitBranch className="size-3" />
+                          从此处分叉
+                        </span>
                         <div className="h-px flex-1 bg-border" />
                       </div>
                     )}
                   </div>
                 );
               })}
-              {live && <MessageList state={live.state} query={live.query} attachments={live.attachments} running={status === "running"} onApprovalDecision={onApprovalDecision} />}
+              {live && (
+                <MessageList
+                  state={live.state}
+                  query={live.query}
+                  attachments={live.attachments}
+                  running={status === "running"}
+                  onApprovalDecision={onApprovalDecision}
+                  onOpenSources={openSources}
+                  onOpenArtifact={openArtifact}
+                />
+              )}
               {live?.failed && status !== "running" && (
                 // 中断/未终态的当前轮：显式标记，否则冻结的部分回答与"完成"无从区分。
-                <div className="mt-1 text-xs text-amber-400">⚠ 已停止，此轮未走到终态，仅展示已产生部分</div>
+                <div className="mt-1 flex items-center gap-1 text-xs text-warning">
+                  <TriangleAlert className="size-3.5 shrink-0" />
+                  已停止，此轮未走到终态，仅展示已产生部分
+                </div>
               )}
               {loadingHistory && (
                 <div className="mt-3 space-y-2">
-                  <div className="text-sm text-stone-500 pulse-dot">● 载入历史会话…</div>
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground/70">
+                    <span className="thinking-dots"><span /><span /><span /></span>
+                    载入历史会话…
+                  </div>
                   <Skeleton className="h-16 w-3/4" />
                   <Skeleton className="h-10 w-1/2" />
                 </div>
               )}
-              {status === "running" && <div className="mt-3 text-sm text-stone-500 pulse-dot">● 运行中…</div>}
+              {status === "running" && (
+                <div data-testid="run-indicator" className="mt-3 flex items-center gap-2 text-sm text-muted-foreground/70">
+                  <span className="thinking-dots"><span /><span /><span /></span>
+                  运行中…
+                </div>
+              )}
               {status === "error" && (
-                <div className="mt-3 text-sm text-rose-400">运行出错，请查看健康状态或重试。</div>
+                <div className="mt-3 text-sm text-destructive">运行出错，请查看健康状态或重试。</div>
               )}
             </div>
           )}
@@ -596,7 +637,14 @@ export function ChatView({
             className="hidden w-1 shrink-0 touch-none cursor-col-resize bg-border/40 transition-colors select-none hover:bg-primary/50 lg:block"
           />
           <div style={{ width: artifactsWidth }} className="hidden shrink-0 lg:block">
-            <FilesPanel artifacts={artifacts} uploads={uploads} onClose={closeArtifacts} />
+            <WorkspacePanel
+              artifacts={artifacts}
+              uploads={uploads}
+              activity={activity}
+              focus={wsFocus}
+              onFocusConsumed={consumeFocus}
+              onClose={closeArtifacts}
+            />
           </div>
         </>
       )}

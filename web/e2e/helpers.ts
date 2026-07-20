@@ -40,11 +40,11 @@ export async function sendMessage(page: Page, text: string): Promise<void> {
 
 /**
  * 等待第 n 轮完成。完成锚（docs/11 §4.3 风险④）：“结论”标签数达到 n 且
- * “● 运行中…”指示消失——healthz 徽章 30s 轮询不可作等待锚点。
+ * 运行指示（data-testid=run-indicator）消失——healthz 徽章 30s 轮询不可作等待锚点。
  */
 export async function waitTurnDone(page: Page, n: number): Promise<void> {
   await expect(page.getByText("结论", { exact: true })).toHaveCount(n, { timeout: 30_000 });
-  await expect(page.getByText("● 运行中…")).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.getByTestId("run-indicator")).toHaveCount(0, { timeout: 30_000 });
 }
 
 // —— 离线构造合法 PNG（inpaint 底图用 setInputFiles 直喂 buffer，不依赖磁盘 fixture）——

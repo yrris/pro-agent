@@ -7,19 +7,21 @@ import { CALC_QUESTION, freshUserId, gotoAsUser, sendMessage, waitTurnDone } fro
 test("示例问题走完流式一轮：calculator 工具卡 + 答案 + 结论", async ({ page }) => {
   await gotoAsUser(page, freshUserId());
 
-  // 空态：一键示例问题（也验证空态文案）
+  // 空态 Hero 文案在，然后直接输入发送（建议 chips 已换成展示题，不再含 CALC）
   await expect(page.getByText("有什么可以帮上忙？")).toBeVisible();
-  await page.getByRole("button", { name: CALC_QUESTION }).click();
+  await sendMessage(page, CALC_QUESTION);
 
-  // 流式过程与终态（FAKE 确定性）：工具卡 → 结论卡
-  await expect(page.getByText("🔧 calculator")).toBeVisible({ timeout: 30_000 });
+  // 流式过程与终态（FAKE 确定性）：紧凑工具行（mono chip 含工具名原文）→ 结论卡
+  await expect(page.getByTestId("tool-row").filter({ hasText: "calculator" }).first()).toBeVisible({
+    timeout: 30_000,
+  });
   await waitTurnDone(page, 1);
   await expect(page.getByText("答案是 14。").first()).toBeVisible();
 });
 
 test("同会话第二轮：侧栏仍 1 个会话，timeline 累积 2 轮", async ({ page }) => {
   await gotoAsUser(page, freshUserId());
-  await page.getByRole("button", { name: CALC_QUESTION }).click();
+  await sendMessage(page, CALC_QUESTION);
   await waitTurnDone(page, 1);
 
   // 第二轮（fake 脚本对任意问题给同一答案，用不同文案区分两个用户气泡）

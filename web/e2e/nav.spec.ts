@@ -2,13 +2,13 @@
 // ChatView 永久挂载、非 chat 视图仅 CSS hidden（App.tsx），断言必须用 toBeVisible/toBeHidden
 // 而非 toBeAttached（docs/11 §4.3 风险、地图风险④）。
 import { expect, test } from "@playwright/test";
-import { CALC_QUESTION, freshUserId, gotoAsUser, waitTurnDone } from "./helpers";
+import { CALC_QUESTION, freshUserId, gotoAsUser, sendMessage, waitTurnDone } from "./helpers";
 
 test("五导航切换与高亮；切走再切回对话历史仍在（hidden 不卸载）", async ({ page }) => {
   await gotoAsUser(page, freshUserId());
 
   // 先造 1 轮对话内容，供“切回仍在”断言
-  await page.getByRole("button", { name: CALC_QUESTION }).click();
+  await sendMessage(page, CALC_QUESTION);
   await waitTurnDone(page, 1);
   const conclusion = page.getByText("结论", { exact: true });
 
