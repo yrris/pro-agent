@@ -200,6 +200,22 @@ class Settings(BaseSettings):
     # （每次执行人工审批）。local 运行器 + 无审批 = 认知面主机上的无沙箱 RCE，装配期会告警。
     code_interpreter_enabled: bool = Field(default=False)
 
+    # —— 联网搜索（web_search 工具）——
+    # provider："auto"（配了 Tavily key 用 tavily，否则 ddg 免 key）| "tavily" | "ddg"
+    # | "fake"（测试确定性）；空串=不注册 web_search 工具（镜像 image_gen_provider 门控）。
+    search_provider: str = Field(default="auto")
+    tavily_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("COGNITION_TAVILY_API_KEY", "TAVILY_API_KEY"),
+    )
+    search_max_results: int = Field(default=6, ge=1, le=10)
+    search_timeout_seconds: float = Field(default=15.0, gt=0)
+    # GitHub API 认证（web_fetch 对 api.github.com / raw.githubusercontent.com 注入
+    # Authorization，限流 60→5000 次/小时）。**只认 COGNITION_GITHUB_TOKEN，不接裸
+    # GITHUB_TOKEN 别名**：开发机 shell 常驻 gh CLI 的 GITHUB_TOKEN，接了会被静默吸入
+    # 并随抓取请求发出——凭据外送必须显式 opt-in，不能靠环境巧合。
+    github_token: str | None = Field(default=None)
+
     # —— 图像生成（M9 线 B：provider 抽象可切换，国产便宜模型优先）——
     # 空串=不注册 image_generate 工具（镜像 rag_enabled 门控先例）；fake 供测试/离线。
     image_gen_provider: str = Field(

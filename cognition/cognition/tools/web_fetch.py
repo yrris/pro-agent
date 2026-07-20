@@ -136,8 +136,29 @@ def validate_fetch_url(url: str) -> Optional[str]:
     return None
 
 
-def build_web_fetch_tool() -> BaseTool:
-    """构造 web_fetch 工具。"""
+# GitHub token 只对这两个主机注入（**精确匹配**，非后缀匹配——api.github.com.evil.com
+# 之类的伪装域拿不到 token；github.com 网页版无需认证也不给，最小暴露面）。
+_GITHUB_AUTH_HOSTS = frozenset({"api.github.com", "raw.githubusercontent.com"})
+
+
+def auth_headers_for(host: str, token: Optional[str]) -> dict[str, str]:
+    """按主机名给出请求头（纯函数，可测）：命中 GitHub API/Raw 才带 Bearer token。
+
+    调用方在重定向循环里**逐跳重算**——302 跳出 GitHub 后 token 绝不跟随第三方。
+    """
+    if token and host in _GITHUB_AUTH_HOSTS:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
+
+
+def build_web_fetch_tool(settings=None, *, transport=None) -> BaseTool:  # noqa: ANN001
+    """构造 web_fetch 工具。
+
+    settings 可选（加性默认，旧调用零改）：提供 github_token 时对 api.github.com /
+    raw.githubusercontent.com 注入认证（限流 60→5000 次/小时）。transport 为测试
+    接缝（httpx.MockTransport 离线验证请求头/逐跳行为）。
+    """
+    github_token = getattr(settings, "github_token", None) if settings is not None else None
 
     async def web_fetch(url: str) -> str:
         """抓取一个公开网页并返回其标题与正文文本（截断至 2 万字符）。
@@ -150,6 +171,7 @@ def build_web_fetch_tool() -> BaseTool:
             async with httpx.AsyncClient(
                 timeout=_TIMEOUT_S, follow_redirects=False,
                 headers={"User-Agent": "pro-agent/1.0 (+research)"},
+                transport=transport,
             ) as client:
                 cur = url
                 resp = None
@@ -157,7 +179,11 @@ def build_web_fetch_tool() -> BaseTool:
                     reason = validate_fetch_url(cur)  # 发请求前校验本跳目标
                     if reason:
                         return f"抓取被拒绝：{reason}（{cur}）"
-                    async with client.stream("GET", cur) as r:
+                    # 认证头按**当前跳**主机名逐跳重算，且只随本次请求发送（绝不设到
+                    # client 级）——重定向落到非 GitHub 主机时 token 不跟随；token 也
+                    # 绝不出现在观测文本/日志里。
+                    hop_headers = auth_headers_for(urlparse(cur).hostname or "", github_token)
+                    async with client.stream("GET", cur, headers=hop_headers) as r:
                         if r.is_redirect:
                             loc = r.headers.get("location", "")
                             cur = str(r.next_request.url) if r.next_request else loc

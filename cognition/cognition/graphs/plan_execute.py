@@ -105,9 +105,10 @@ def compose_planner_system(
 # 拓扑与 plan_solve 完全相同，仅提示词与轮次预算不同——"配置化变体而非新图"）。
 RESEARCH_PLANNER_SYSTEM = (
     "你是深度研究规划器。面对研究型问题，把调研拆解为有序步骤并调用 planning 工具产出 "
-    "{title, steps}：先**广度检索**（knowledge_search 检索用户知识库；如有网页/搜索类工具"
-    "也应使用），再**交叉验证**关键论断（不同角度/来源互证），最后**汇总**为带〔n〕引用的"
-    "结论。同一步骤内可并行的检索用字面量 <sep> 分隔。\n"
+    "{title, steps}：先**广度检索**，再**交叉验证**关键论断（不同角度/来源互证），最后"
+    "**汇总**为带〔n〕引用的结论。需要外部网络信息时（若工具可用）：广度检索用 web_search "
+    "拿候选来源，关键来源用 web_fetch 深读原文，知识库检索用 knowledge_search。"
+    "同一步骤内可并行的检索用字面量 <sep> 分隔。\n"
     "{{sop}}\n"
     "硬性要求：每个步骤必须自包含（执行者看不到对话历史，禁止「上面/之前」等指代，"
     "要查的问题与期望证据写进步骤文本）；结论只能基于检索到的证据并标注〔n〕引用，"
@@ -176,14 +177,26 @@ def _parse_planning_text(text: str) -> Optional[dict]:
 
 
 def _planning_acks(ai: AIMessage) -> list[ToolMessage]:
-    """给 planning 工具调用补 ack 应答（planner 只解析、从不执行该调用——
-    历史里必须有 ToolMessage 配对，否则真实 provider 第二轮起 400）。"""
+    """给 planner 轮的**全部**工具调用补 ack 应答（planner 只解析、从不执行——
+    历史里必须有 ToolMessage 配对，否则真实 provider 第二轮起 400）。
+
+    覆盖三种情形：planning 正常调用；模型幻觉调用其他工具名（同样要应答，否则悬空）；
+    **invalid_tool_calls**（JSON 参数损坏，`.tool_calls` 为空但出站序列化仍带上）——
+    深研长跑中 planning 参数被截断即属此类，漏应答会让线程此后每轮 400。
+    无 id 的调用由入模型前的 repair_dangling_tool_calls 投影剥除兜底。"""
     acks: list[ToolMessage] = []
     for tc in getattr(ai, "tool_calls", None) or []:
         name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
         tcid = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", "")
-        if name == "planning" and tcid:
-            acks.append(ToolMessage(content="计划已登记", tool_call_id=str(tcid)))
+        if tcid:
+            note = "计划已登记" if name == "planning" else "（该调用不被执行：规划阶段仅接受 planning 工具）"
+            acks.append(ToolMessage(content=note, tool_call_id=str(tcid)))
+    for tc in getattr(ai, "invalid_tool_calls", None) or []:
+        tcid = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", "")
+        if tcid:
+            acks.append(
+                ToolMessage(content="（调用参数无法解析，已忽略）", tool_call_id=str(tcid), status="error")
+            )
     return acks
 
 

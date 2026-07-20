@@ -30,13 +30,32 @@ SUMMARY_PREFIX = "〔前情摘要〕"
 DANGLING_TOOL_NOTE = "（该工具调用执行被中断，未产生结果）"
 
 
+def _expected_tool_call_ids(m: AIMessage) -> list[str]:
+    """出站请求会携带的全部 tool_call id：tool_calls ∪ invalid_tool_calls。
+
+    关键陷阱：JSON 参数损坏的调用落在 `invalid_tool_calls`（`.tool_calls` 为空），
+    但 langchain-openai 序列化出站 assistant 消息时**两者都会算进 tool_calls**——
+    只按 `.tool_calls` 判断会漏掉 invalid 项，缺应答 → provider 400（实测 DeepSeek
+    深研长跑中 planning 参数被截断即触发，线程从此每轮 400）。
+    """
+    ids: list[str] = []
+    for tc in [*(getattr(m, "tool_calls", None) or []), *(getattr(m, "invalid_tool_calls", None) or [])]:
+        tcid = str((tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", "")) or "")
+        if tcid:
+            ids.append(tcid)
+    return ids
+
+
 def repair_dangling_tool_calls(messages: list[AnyMessage]) -> list[AnyMessage]:
     """把消息序列修复成 provider 合法形态（只读投影，不回写 state/checkpoint）。
 
-    两类病态都会让 DeepSeek/OpenAI/Anthropic 直接 400，且一旦进入 checkpoint 线程，
+    三类病态都会让 DeepSeek/OpenAI/Anthropic 直接 400，且一旦进入 checkpoint 线程，
     该会话每一轮都失败（永久污染）：
-    - **悬空 tool_calls**：AIMessage.tool_calls 缺少紧随的 ToolMessage 应答——工具执行
+    - **悬空 tool_calls**：AIMessage 的调用缺少紧随的 ToolMessage 应答——工具执行
       崩溃当轮 think 已提交、tools 未提交时产生 → 紧随其组补一条合成 error ToolMessage；
+    - **invalid_tool_calls**（JSON 损坏）：同样会被序列化进出站 tool_calls，一并补应答；
+      无 id 的 invalid 项无法应答 → 从投影副本中剥除（连同 additional_kwargs 里的原始
+      tool_calls，防序列化兜底路径把它捞回来）；
     - **孤儿 ToolMessage**：无前置 tool_call 应答对象 → 丢弃。
 
     健康序列原样返回（不复制、不改动），因此可无条件挂在每次入模型前。
@@ -46,17 +65,29 @@ def repair_dangling_tool_calls(messages: list[AnyMessage]) -> list[AnyMessage]:
     i, n = 0, len(messages)
     while i < n:
         m = messages[i]
-        if isinstance(m, AIMessage) and getattr(m, "tool_calls", None):
-            group: list[AnyMessage] = [m]
+        if isinstance(m, AIMessage) and (
+            getattr(m, "tool_calls", None) or getattr(m, "invalid_tool_calls", None)
+        ):
+            head: AIMessage = m
+            has_dangling_invalid = any(
+                not str((tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", "")) or "")
+                for tc in getattr(m, "invalid_tool_calls", None) or []
+            )
+            if has_dangling_invalid:
+                # 无 id 的损坏调用没法配 ToolMessage：投影副本里剥掉（含 additional_kwargs
+                # 原始 tool_calls，避免序列化兜底路径复原它）。
+                kwargs = {k: v for k, v in (m.additional_kwargs or {}).items() if k != "tool_calls"}
+                head = m.model_copy(update={"invalid_tool_calls": [], "additional_kwargs": kwargs})
+                changed = True
+            group: list[AnyMessage] = [head]
             answered: set[str] = set()
             j = i + 1
             while j < n and isinstance(messages[j], ToolMessage):
                 group.append(messages[j])
                 answered.add(str(getattr(messages[j], "tool_call_id", "") or ""))
                 j += 1
-            for tc in m.tool_calls:
-                tcid = str((tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", "")) or "")
-                if tcid and tcid not in answered:
+            for tcid in _expected_tool_call_ids(head):
+                if tcid not in answered:
                     group.append(
                         ToolMessage(content=DANGLING_TOOL_NOTE, tool_call_id=tcid, status="error")
                     )

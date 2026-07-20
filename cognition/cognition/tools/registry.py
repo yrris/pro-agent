@@ -92,7 +92,15 @@ async def build_tool_suite(
     if getattr(settings, "web_fetch_enabled", True):
         from cognition.tools.web_fetch import build_web_fetch_tool
 
-        tools.append(build_web_fetch_tool())
+        tools.append(build_web_fetch_tool(settings))
+
+    # —— 联网搜索：provider 配置非空才注册（默认 auto=开——ddg 免 key 可用，装配零
+    # I/O，运行时失败在工具内 fail-soft；镜像 image_gen_provider 的空串门控）——
+    if getattr(settings, "search_provider", ""):
+        from cognition.providers.search import build_search_provider
+        from cognition.tools.web_search import build_web_search_tool
+
+        tools.append(build_web_search_tool(build_search_provider(settings), settings))
     if getattr(settings, "code_interpreter_enabled", False):
         from cognition.tools.code_interpreter import build_code_interpreter_tool
 

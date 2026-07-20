@@ -160,3 +160,63 @@ def test_planner_history_repaired_before_model_call():
     }
     result = asyncio.run(graph.ainvoke(state, {"metadata": {"request_id": "r2"}}))
     assert result.get("plan") is not None  # 正常走完（planner 校验未抛）
+
+
+# —— invalid_tool_calls（JSON 参数损坏）：线上 DeepSeek 深研 400 的根因回归 ——
+# langchain-openai 序列化出站 assistant 消息时 tool_calls ∪ invalid_tool_calls 都会带上，
+# 只按 .tool_calls 判断会漏应答 invalid 项 → 每轮 400、线程永久污染。
+
+
+def test_invalid_tool_call_with_id_gets_synthetic_answer():
+    ai = AIMessage(
+        content="",
+        invalid_tool_calls=[
+            {"name": "planning", "args": "{broken", "id": "call_bad", "error": "bad json", "type": "invalid_tool_call"}
+        ],
+    )
+    out = repair_dangling_tool_calls([HumanMessage(content="q"), ai])
+    tails = [m for m in out if isinstance(m, ToolMessage)]
+    assert [t.tool_call_id for t in tails] == ["call_bad"]
+    assert tails[0].status == "error"
+
+
+def test_invalid_tool_call_without_id_is_stripped():
+    ai = AIMessage(
+        content="",
+        invalid_tool_calls=[{"name": "planning", "args": "{broken", "id": None, "error": "e", "type": "invalid_tool_call"}],
+        additional_kwargs={"tool_calls": [{"raw": "chunk"}], "other": "keep"},
+    )
+    out = repair_dangling_tool_calls([HumanMessage(content="q"), ai])
+    fixed = out[1]
+    assert isinstance(fixed, AIMessage)
+    assert fixed.invalid_tool_calls == []
+    assert "tool_calls" not in fixed.additional_kwargs  # 防序列化兜底路径复原
+    assert fixed.additional_kwargs.get("other") == "keep"
+    assert not any(isinstance(m, ToolMessage) for m in out)
+
+
+def test_mixed_valid_and_invalid_calls_all_answered():
+    ai = AIMessage(
+        content="",
+        tool_calls=[{"name": "planning", "args": {"title": "t"}, "id": "call_ok"}],
+        invalid_tool_calls=[{"name": "planning", "args": "{x", "id": "call_bad", "error": "e", "type": "invalid_tool_call"}],
+    )
+    out = repair_dangling_tool_calls([ai, ToolMessage(content="计划已登记", tool_call_id="call_ok")])
+    answered = {m.tool_call_id for m in out if isinstance(m, ToolMessage)}
+    assert answered == {"call_ok", "call_bad"}
+
+
+def test_planner_acks_cover_invalid_and_foreign_calls():
+    from cognition.graphs.plan_execute import _planning_acks
+
+    ai = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "planning", "args": {"title": "t"}, "id": "c1"},
+            {"name": "web_search", "args": {"query": "幻觉调用"}, "id": "c2"},
+        ],
+        invalid_tool_calls=[{"name": "planning", "args": "{x", "id": "c3", "error": "e", "type": "invalid_tool_call"}],
+    )
+    acks = _planning_acks(ai)
+    assert [a.tool_call_id for a in acks] == ["c1", "c2", "c3"]
+    assert acks[2].status == "error"

@@ -37,6 +37,84 @@ def test_ssrf_guard_matrix():
     # 不强断言放行，避免离线 CI 抖动。
 
 
+def test_auth_headers_for_matrix():
+    """GitHub token 注入：仅两个主机**精确匹配**；伪装域/网页版/无 token 一律空。"""
+    from cognition.tools.web_fetch import auth_headers_for
+
+    assert auth_headers_for("api.github.com", "tok") == {"Authorization": "Bearer tok"}
+    assert auth_headers_for("raw.githubusercontent.com", "tok") == {"Authorization": "Bearer tok"}
+    for host in ("github.com", "evil.com", "api.github.com.evil.com", "gist.github.com", ""):
+        assert auth_headers_for(host, "tok") == {}, host
+    assert auth_headers_for("api.github.com", None) == {}
+    assert auth_headers_for("api.github.com", "") == {}
+
+
+def _fetch_tool_with_transport(handler, token: str | None = None):
+    """构造带 MockTransport 的 web_fetch（离线；SSRF 的 DNS 判定被替换为放行公网假设）。"""
+    import httpx
+
+    from cognition.tools.web_fetch import build_web_fetch_tool
+
+    settings = Settings(github_token=token) if token is not None else None
+    return build_web_fetch_tool(settings, transport=httpx.MockTransport(handler))
+
+
+def test_web_fetch_github_auth_via_transport_seam(monkeypatch):
+    """api.github.com 带 Bearer；非 GitHub 主机不带；token 不出现在观测文本。"""
+    import httpx
+
+    # MockTransport 不走真实网络，但 validate_fetch_url 仍会做真实 DNS——离线环境
+    # 会 fail-closed 拒绝。把 is_private_host 替换为"恒公网"，scheme/主机名校验保留。
+    monkeypatch.setattr("cognition.tools.web_fetch.is_private_host", lambda h: False)
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen[request.url.host] = request.headers.get("authorization", "")
+        return httpx.Response(200, text='{"ok": true}', headers={"content-type": "application/json"})
+
+    tool = _fetch_tool_with_transport(handler, token="ghp_secret123")
+
+    async def fetch(url):
+        return await tool.ainvoke(
+            {"args": {"url": url}, "id": "wf1", "name": "web_fetch", "type": "tool_call"},
+            config={"metadata": {"request_id": "run-wf"}},
+        )
+
+    msg = asyncio.run(fetch("https://api.github.com/repos/o/r"))
+    assert seen["api.github.com"] == "Bearer ghp_secret123"
+    assert "ghp_secret123" not in msg.content  # token 绝不进观测
+    asyncio.run(fetch("https://example.com/page"))
+    assert seen["example.com"] == ""
+    # 未配 token（settings=None 旧式调用）→ GitHub 主机也不带认证头。
+    tool_bare = _fetch_tool_with_transport(handler)
+    asyncio.run(tool_bare.ainvoke(
+        {"args": {"url": "https://api.github.com/zen"}, "id": "wf2", "name": "web_fetch", "type": "tool_call"}
+    ))
+    assert seen["api.github.com"] == ""
+
+
+def test_web_fetch_auth_dropped_after_redirect_hop(monkeypatch):
+    """认证头逐跳重算：302 跳出 GitHub 后 token 不跟随第三方主机。"""
+    import httpx
+
+    monkeypatch.setattr("cognition.tools.web_fetch.is_private_host", lambda h: False)
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen[request.url.host] = request.headers.get("authorization", "")
+        if request.url.host == "api.github.com":
+            return httpx.Response(302, headers={"location": "https://example.com/final"})
+        return httpx.Response(200, text="终点页", headers={"content-type": "text/plain; charset=utf-8"})
+
+    tool = _fetch_tool_with_transport(handler, token="ghp_secret123")
+    msg = asyncio.run(tool.ainvoke(
+        {"args": {"url": "https://api.github.com/repos/o/r"}, "id": "wf3", "name": "web_fetch", "type": "tool_call"}
+    ))
+    assert seen["api.github.com"] == "Bearer ghp_secret123"
+    assert seen["example.com"] == ""  # 跳出 GitHub：header 按新主机重算为空
+    assert "终点页" in msg.content and "ghp_secret123" not in msg.content
+
+
 # —— code_interpreter ——
 
 def _ci(settings=None):
