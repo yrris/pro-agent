@@ -28,12 +28,41 @@ func sanitizeNULs(in []string) []string {
 	return in
 }
 
-// sanitizeNULJSON 对已序列化 JSON 做同类净化（\u0000 → � 转义层替换）。
-// 用于 tool input 的 RawMessage 与 MarshalPayload 兜底。极端情况下用户正文里的
-// 字面量 `\u0000` 文本（JSON 里编码为 `\\u0000`）会被顺带替换成 `\\ufffd`——
-// 仅影响病态输入的显示，可接受。
+// sanitizeNULJSON 对已序列化 JSON 做同类净化：把**真正的** \u0000 转义替换为 �。
+// 用于 tool input 的 RawMessage 与 MarshalPayload 兜底。
+//
+// 必须区分转义奇偶性（22P02 回归教训）：网页正文里的字面文本 `\u0000` 会被 Go 序列化成
+// `\\u0000`——朴素 ReplaceAll 会命中其中的 `\u0000` 子串，留下孤立反斜杠+�的非法转义，
+// 整条 payload 变非法 JSON、run 落库即死（实测深研抓到含该字面文本的页面直接 FAILED）。
+// 规则：前缀反斜杠为奇数个时末尾那个才是转义引导符（真 NUL 转义 → 替换）；
+// 偶数个则全是成对字面反斜杠（字面文本 → 保留）。
 func sanitizeNULJSON(b []byte) []byte {
-	return bytes.ReplaceAll(b, []byte(`\u0000`), []byte(`�`))
+	if !bytes.Contains(b, []byte(`\u0000`)) {
+		return b
+	}
+	var out bytes.Buffer
+	out.Grow(len(b))
+	for i := 0; i < len(b); {
+		if b[i] != '\\' {
+			out.WriteByte(b[i])
+			i++
+			continue
+		}
+		j := i
+		for j < len(b) && b[j] == '\\' {
+			j++
+		}
+		n := j - i // 连续反斜杠数
+		if n%2 == 1 && bytes.HasPrefix(b[j:], []byte("u0000")) {
+			out.Write(b[i : j-1]) // 保留成对的字面反斜杠（偶数个）
+			out.WriteString("�")
+			i = j + len("u0000")
+			continue
+		}
+		out.Write(b[i:j])
+		i = j
+	}
+	return out.Bytes()
 }
 
 // FromProto 把 gRPC 收到的 proto Event 转换为规范 Envelope。

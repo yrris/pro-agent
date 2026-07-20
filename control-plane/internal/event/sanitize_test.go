@@ -7,6 +7,7 @@ package event
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 
 	agentv1 "my-agent/control-plane/internal/genproto/agent/v1"
@@ -54,5 +55,47 @@ func TestMarshalPayloadSanitizesNULFallback(t *testing.T) {
 	}
 	if !bytes.Contains(payload, []byte("x�y")) {
 		t.Fatalf("not replaced with U+FFFD: %s", payload)
+	}
+}
+
+// —— 22P02 回归：字面文本（反斜杠+u0000）与真 NUL 转义的奇偶性区分 ——
+// 网页正文里的字面 6 字符序列经 Go 序列化为双反斜杠形态；朴素 ReplaceAll 会把其中
+// 子串换成 �，留下孤立反斜杠 → 整条 payload 非法 JSON、run 落库即死。
+
+func TestSanitizeKeepsLiteralBackslashU0000Text(t *testing.T) {
+	lit := "\\" + "u0000" // 字面文本：反斜杠 + u0000
+	env := Envelope{Type: TypeResult, Result: &ResultPayload{Text: "code: " + lit + " end"}}
+	payload, err := env.MarshalPayload()
+	if err != nil {
+		t.Fatalf("MarshalPayload: %v", err)
+	}
+	if !json.Valid(payload) {
+		t.Fatalf("payload not valid json: %s", payload)
+	}
+	var back ResultPayload
+	if err := json.Unmarshal(payload, &back); err != nil {
+		t.Fatalf("round-trip: %v", err)
+	}
+	if back.Text != "code: "+lit+" end" {
+		t.Fatalf("literal text mutated: %q", back.Text)
+	}
+}
+
+func TestSanitizeMixedLiteralBackslashAndRawNUL(t *testing.T) {
+	lit := "\\" // 一个字面反斜杠，后跟真 NUL
+	env := Envelope{Type: TypeResult, Result: &ResultPayload{Text: "x" + lit + "\x00y"}}
+	payload, err := env.MarshalPayload()
+	if err != nil {
+		t.Fatalf("MarshalPayload: %v", err)
+	}
+	if !json.Valid(payload) {
+		t.Fatalf("payload not valid json: %s", payload)
+	}
+	var back ResultPayload
+	if err := json.Unmarshal(payload, &back); err != nil {
+		t.Fatalf("round-trip: %v", err)
+	}
+	if back.Text != "x"+lit+"\ufffdy" {
+		t.Fatalf("mixed case wrong: %q", back.Text)
 	}
 }
