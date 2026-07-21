@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -152,5 +153,52 @@ func TestListAllRunsPagedSubMillisecond(t *testing.T) {
 	}
 	if got := runIDs(page2); len(got) != 1 || got[0] != "run-lo" {
 		t.Fatalf("同毫秒内更旧的 run-lo 不应被丢，第 2 页应为 [run-lo]，得 %v", got)
+	}
+}
+
+// 会话历史附件聚合（SessionAttachmentsReader）：跨轮合并、resourceKey 去重、排除当前轮、owner 隔离。
+func TestSessionAttachmentsJSONMergesAndDedupes(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	runs := store.NewRunRepository(pool)
+
+	sid := "s-hist-att"
+	mk := func(runID, attJSON string) {
+		var att []byte
+		if attJSON != "" {
+			att = []byte(attJSON)
+		}
+		if err := runs.CreateRun(ctx, store.CreateRunParams{
+			RunID: runID, SessionID: sid, OwnerID: "o1", QueryText: "q", Attachments: att,
+		}); err != nil {
+			t.Fatalf("CreateRun(%s): %v", runID, err)
+		}
+	}
+	mk("hist-r1", `[{"resourceKey": "uploads/o1/s/a.png", "fileName": "a.png"}]`)
+	mk("hist-r2", `[{"resourceKey": "uploads/o1/s/a.png", "fileName": "a.png"}, {"resourceKey": "uploads/o1/s/b.jpeg", "fileName": "b.jpeg"}]`)
+	mk("hist-r3", `[{"resourceKey": "uploads/o1/s/c.png", "fileName": "c.png"}]`) // 当前轮：应被排除
+
+	reader, ok := runs.(store.SessionAttachmentsReader)
+	if !ok {
+		t.Fatal("RunRepository 未实现 SessionAttachmentsReader")
+	}
+	b, err := reader.SessionAttachmentsJSON(ctx, sid, "o1", "hist-r3")
+	if err != nil {
+		t.Fatalf("SessionAttachmentsJSON: %v", err)
+	}
+	var items []map[string]any
+	if err := json.Unmarshal(b, &items); err != nil {
+		t.Fatalf("unmarshal: %v (%s)", err, b)
+	}
+	names := make([]string, 0, len(items))
+	for _, it := range items {
+		names = append(names, it["fileName"].(string))
+	}
+	if len(names) != 2 || names[0] != "a.png" || names[1] != "b.jpeg" {
+		t.Fatalf("合并去重结果错误: %v", names)
+	}
+	// owner 隔离：换 owner 查询 → 无历史（nil）
+	if b2, _ := reader.SessionAttachmentsJSON(ctx, sid, "o2", "x"); b2 != nil {
+		t.Fatalf("owner 隔离失效: %s", b2)
 	}
 }

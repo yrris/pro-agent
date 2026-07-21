@@ -35,7 +35,10 @@ def run_generated_dir(run_id: str, *, create: bool = False) -> str:
     return path
 
 
-_MAX_AGE_S = 3600  # 暂存目录保留上限（无 run-end 钩子，就地机会性清理防无界增长）
+# 暂存目录保留上限（无 run-end 钩子，就地机会性清理防无界增长）。
+# 24h：暂存现按**会话**作用域（key=session_id），续轮改需求要能复用此前轮次的生成图
+#（1h 曾导致「改个版式就得重新生图」）；MinIO 产物仍是持久层，这里只是内联缓存。
+_MAX_AGE_S = 86400
 
 
 def _sweep_old() -> None:
@@ -66,6 +69,26 @@ def stash_generated(run_id: str, file_name: str, data: bytes) -> None:
         _sweep_old()  # 顺手清超龄目录（成本极低，只在生图后触发）
     except OSError:
         pass
+
+
+def next_image_index(key: str) -> int:
+    """该暂存区下一个可用的 image-N.png 编号（纯扫描；空目录→1）。
+
+    会话作用域后编号必须跨轮续接：第二轮再生图若仍从 image-1 起会覆盖第一轮的暂存图，
+    frontend-design 引用 generated/image-1.png 就指错图。
+    """
+    import re
+
+    d = run_generated_dir(key)
+    mx = 0
+    try:
+        for entry in os.scandir(d):
+            m = re.fullmatch(r"image-(\d+)\.png", entry.name)
+            if m:
+                mx = max(mx, int(m.group(1)))
+    except OSError:
+        pass
+    return mx + 1
 
 
 def has_generated(run_id: str) -> bool:

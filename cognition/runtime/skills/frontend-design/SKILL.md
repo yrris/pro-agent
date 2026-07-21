@@ -35,10 +35,11 @@ script_runner(
 沙箱预览 iframe 无网络凭据，页面里只有内联 data-URI 的图片能显示。两类图的正确写法
 （`render_page.py` 自动替换成 data-URI）：
 
-1. **生成图**：先调 `image_generate`（产出 `image-1.png`/`image-2.png`…），HTML 里用
-   **`<img src="generated/image-1.png">`** 引用（文件名须与产出一致，image-1.png 起编号）。
+1. **生成图**：先调 `image_generate`（产出 `image-N.png`，编号在**本会话内续接**），HTML 里用
+   **`<img src="generated/image-N.png">`** 引用（文件名以 image_generate 观察结果里列出的为准）。
+   本会话**此前轮次**生成的图也仍在 generated/ 可直接引用——改版式/改布局无需重新生图。
 2. **用户上传的图**（如原图对比场景）：`script_runner` 调用时必须传
-   **`input_files=["原图文件名.jpeg"]`**（文件名取本轮消息附件注记），HTML 里用
+   **`input_files=["原图文件名.jpeg"]`**（本轮或**本会话此前轮次**上传的文件名均可，无需用户重传），HTML 里用
    **`<img src="原图文件名.jpeg">`** 裸文件名引用。忘传 input_files 则无法内联，
    渲染输出会打「警告: N 个本地图片引用未找到」——看到警告必须补上 input_files 重新渲染。
 

@@ -50,7 +50,12 @@ def test_payload_builders_and_parsers():
     assert st == "SUCCEEDED" and urls == ["http://x/1.png"]
 
 
-def test_tool_multi_image_artifacts():
+def test_tool_multi_image_artifacts(monkeypatch, tmp_path):
+    # 暂存基目录隔离：编号现按会话作用域跨轮续接（next_image_index 扫描既有文件），
+    # 共享磁盘残留会让 image-N 起始编号漂移。
+    from cognition.skills.runner import scratch
+
+    monkeypatch.setattr(scratch, "_BASE", str(tmp_path))
     tool = build_image_generate_tool(FakeImageProvider(), Settings())
 
     async def run():
@@ -672,3 +677,38 @@ def test_format_openai_image_error_surfaces_moderation_body():
 
     assert format_openai_image_error(502, "<html>bad gateway</html>").startswith("HTTP 502: <html>")
     assert "HTTP 400" in format_openai_image_error(400, '{"error": {}}')  # 空 error 回落原文
+
+
+def test_attachments_whitelist_merges_session_history():
+    """缺陷回归：续轮改需求（如「改成滑块对比」）时，白名单只含本轮附件——历史上传
+    引用不了，模型只能让用户重传+重新生图。修复：本轮 ∪ 会话历史（resource_key 去重）。"""
+    from cognition.skills.tools import _attachments_from_config
+
+    # 历史名单是 Go 原样透传的 runs.attachments —— 真实形状是 camelCase
+    # （上传接口响应），解析层必须归一成 snake_case，否则 resolve_input_files
+    # 取不出名字（实测缺陷：可用附件显示（无））。
+    cfg = {"metadata": {
+        "attachments": '[{"resource_key":"uploads/u/s/aa-new.png","file_name":"new.png"}]',
+        "session_attachments": '[{"resourceKey":"uploads/u/s/bb-old.jpeg","fileName":"picture.jpeg"},'
+                               '{"resourceKey":"uploads/u/s/aa-new.png","fileName":"new.png"}]',
+    }}
+    merged = _attachments_from_config(cfg)
+    assert [a["file_name"] for a in merged] == ["new.png", "picture.jpeg"]  # 本轮优先 + 去重
+
+    only_hist = _attachments_from_config({"metadata": {
+        "session_attachments": '[{"resourceKey":"uploads/u/s/bb-old.jpeg","fileName":"picture.jpeg"}]'}})
+    assert [a["file_name"] for a in only_hist] == ["picture.jpeg"]  # 本轮无附件也能引用历史
+
+    assert _attachments_from_config({"metadata": {"session_attachments": "{broken"}}) == []
+
+
+def test_next_image_index_continues_numbering(monkeypatch, tmp_path):
+    """会话作用域暂存的编号续接：第二轮生图从 image-(N+1) 起，不覆盖第一轮暂存图。"""
+    from cognition.skills.runner import scratch
+
+    monkeypatch.setattr(scratch, "_BASE", str(tmp_path))
+    assert scratch.next_image_index("sess-1") == 1
+    scratch.stash_generated("sess-1", "image-1.png", b"A")
+    scratch.stash_generated("sess-1", "image-2.png", b"B")
+    assert scratch.next_image_index("sess-1") == 3
+    assert scratch.next_image_index("sess-other") == 1  # 会话间隔离

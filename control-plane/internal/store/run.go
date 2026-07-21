@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -78,6 +79,16 @@ type RunRepository interface {
 // 刻意与 RunRepository 分开：既有 RunRepository 的 fake（api 测试）零改，且普通用户端点
 // 绝不经此路径——admin 跨 owner 读用新方法，既有 WHERE owner_id 过滤一处不弱化。
 // pgRunRepo 同时实现它；api 层对已装配的 RunRepository 做类型断言取用（fake/nil 自然降级 503）。
+// SessionAttachmentsReader 是"会话历史附件聚合"的只读端口：dispatch 在起新 run 时把
+// 本会话此前各轮的 runs.attachments 合并去重，经认知面 metadata 下发为附件白名单——
+// 续轮（如「把 HTML 改成滑块对比」）无需用户重传原图。与 AllRunsLister 同款独立接口：
+// 既有 RunRepository fake 零改，dispatch 侧类型断言取用（fake/nil 自然降级为"无历史"）。
+type SessionAttachmentsReader interface {
+	// SessionAttachmentsJSON 返回该会话（owner 隔离）excludeRunID 之外各轮附件合并去重后的
+	// JSON 数组（按 resourceKey 去重、时间升序首见优先）；无附件返回 nil。
+	SessionAttachmentsJSON(ctx context.Context, sessionID, ownerID, excludeRunID string) ([]byte, error)
+}
+
 type AllRunsLister interface {
 	ListAllRuns(ctx context.Context, limit int, before time.Time) ([]Run, error)
 }
@@ -210,4 +221,50 @@ func (r *pgRunRepo) ListAllRunsPaged(ctx context.Context, limit int, before time
 		out = append(out, run)
 	}
 	return out, rows.Err()
+}
+
+// SessionAttachmentsJSON 实现 SessionAttachmentsReader（聚合与去重在 Go 侧做，SQL 只取原料）。
+func (r *pgRunRepo) SessionAttachmentsJSON(ctx context.Context, sessionID, ownerID, excludeRunID string) ([]byte, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT attachments FROM runs
+		WHERE session_id = $1 AND owner_id = $2 AND run_id <> $3 AND attachments IS NOT NULL
+		ORDER BY created_at ASC`, sessionID, ownerID, excludeRunID)
+	if err != nil {
+		return nil, fmt.Errorf("store: session attachments: %w", err)
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	merged := []json.RawMessage{}
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, fmt.Errorf("store: scan session attachments: %w", err)
+		}
+		var items []map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &items); err != nil {
+			continue // 单轮附件 JSON 异常不拖垮整体（历史数据容错）
+		}
+		for _, it := range items {
+			var key string
+			if rk, ok := it["resourceKey"]; ok {
+				_ = json.Unmarshal(rk, &key)
+			}
+			if key == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			b, err := json.Marshal(it)
+			if err != nil {
+				continue
+			}
+			merged = append(merged, b)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: session attachments rows: %w", err)
+	}
+	if len(merged) == 0 {
+		return nil, nil
+	}
+	return json.Marshal(merged)
 }

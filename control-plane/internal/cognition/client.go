@@ -46,6 +46,9 @@ type RunRequest struct {
 	ForkFromSessionID string
 	ForkFromRunID     string
 	Attachments       []Attachment
+	// SessionAttachmentsJSON：会话历史附件合并 JSON（经 metadata["session_attachments"]
+	// 传认知面，与本轮附件合并成工具白名单；nil=无历史，零 proto 改动循审批三键先例）。
+	SessionAttachmentsJSON []byte
 }
 
 // Stream 是一次 run 的事件流；Recv 在流结束时返回 io.EOF。
@@ -142,6 +145,9 @@ func (c *grpcClient) RunAgent(ctx context.Context, req RunRequest) (Stream, erro
 	}
 	if req.ImageGen {
 		metadata["image_gen"] = "1"
+	}
+	if len(req.SessionAttachmentsJSON) > 0 {
+		metadata["session_attachments"] = string(req.SessionAttachmentsJSON)
 	}
 	if req.ApprovalResumeID != "" {
 		metadata["approval_resume_id"] = req.ApprovalResumeID

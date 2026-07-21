@@ -163,9 +163,11 @@ def build_image_generate_tool(provider: ImageGenProvider, settings: Settings) ->
         """根据文字描述生成图片（1-4 张），产出可下载/预览的 PNG 产物。
 
         prompt 写清主体/环境/风格/构图/光影（可先看 image-style-library 技能的风格模板）。
-        source_images 填**用户上传附件的图片文件名**（本轮消息注记中列出的）——传了就做
-        图生图/编辑（把上传图当底图按 prompt 修改），不传就纯文生图。
-        mask 填**蒙版文件名**（同为本轮附件）做局部重绘（inpaint）：蒙版为 RGBA PNG，
+        source_images 填**用户上传附件的图片文件名**——本轮或**本会话此前任意轮次**上传的
+        都可直接引用（无需让用户重传）；传了就做图生图/编辑（把上传图当底图按 prompt 修改），
+        不传就纯文生图。本会话此前已生成过的图也无需重复生成（产物区仍在，网页内联可直接
+        引用 generated/ 下的历史文件名）。
+        mask 填**蒙版文件名**（本轮或本会话历史附件）做局部重绘（inpaint）：蒙版为 RGBA PNG，
         **alpha=0 的透明区域=要重绘的区域**，只作用于第一张源图；必须配合 source_images
         使用。注意 gpt-image 系对 mask 为提示词引导式而非像素级硬约束。
         """
@@ -218,15 +220,20 @@ def build_image_generate_tool(provider: ImageGenProvider, settings: Settings) ->
         run_id = _run_id_from_config(config)
         tcid = tool_call_id or "tc"
         artifacts: list[dict] = []
-        for i, data in enumerate(images, 1):
-            file_name = f"image-{i}.png"
+        # 暂存按**会话**作用域（续轮改需求可复用此前生成图，无需重新生图）；
+        # 编号跨轮续接（next_image_index），否则第二轮从 image-1 重编会覆盖第一轮暂存图。
+        from cognition.skills.runner.scratch import next_image_index, stash_generated
+        from cognition.skills.tools import _session_key_from_config
+
+        session_key = _session_key_from_config(config)
+        offset = await asyncio.to_thread(next_image_index, session_key)
+        for i, data in enumerate(images):
+            file_name = f"image-{offset + i}.png"
             resource_key = f"{run_id}/{tcid}/{file_name}"
             # 上传阻塞 I/O → to_thread（事件循环红线）；失败不阻断（_maybe_upload 内降级）。
             await asyncio.to_thread(_maybe_upload, settings, resource_key, data, "image/png")
-            # B.1：同时把副本落进本 run 的生成图暂存区，供 frontend-design 内联进网页。
-            from cognition.skills.runner.scratch import stash_generated
-
-            await asyncio.to_thread(stash_generated, run_id, file_name, data)
+            # B.1：同时把副本落进会话生成图暂存区，供 frontend-design 内联进网页。
+            await asyncio.to_thread(stash_generated, session_key, file_name, data)
             artifacts.append(
                 {
                     "resource_key": resource_key,

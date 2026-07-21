@@ -31,19 +31,59 @@ _SKILL_PROVIDER = "skill"
 _MAX_READ_CHARS = 20000
 
 
+def _parse_attachment_list(raw) -> list[dict]:
+    """解析附件名单并统一键形。
+
+    历史名单是 Go 原样透传的 runs.attachments（上传接口的 camelCase 形状：
+    fileName/resourceKey），本轮名单是 normalize_attachments 的 snake_case——
+    下游 resolve_input_files 只认 snake_case，此处必须归一，否则历史条目
+    「在名单里却取不出名字」（实测：可用附件显示（无））。"""
+    try:
+        parsed = _json.loads(raw) if isinstance(raw, str) else raw
+        items = list(parsed) if isinstance(parsed, list) else []
+    except Exception:  # noqa: BLE001 — 白名单解析失败按无附件处理
+        return []
+    out: list[dict] = []
+    for a in items:
+        if isinstance(a, dict):
+            out.append(
+                {
+                    "resource_key": str(a.get("resource_key") or a.get("resourceKey") or ""),
+                    "file_name": str(a.get("file_name") or a.get("fileName") or ""),
+                    "mime_type": str(a.get("mime_type") or a.get("mimeType") or ""),
+                }
+            )
+    return out
+
+
+def _session_key_from_config(config: RunnableConfig) -> str:
+    """生成图暂存的会话作用域键：session_id 优先（续轮复用），缺失回落 request_id。"""
+    meta = (config.get("metadata") or {}) if config else {}
+    return str(meta.get("session_id") or meta.get("request_id") or meta.get("run_id") or "run")
+
+
 def _attachments_from_config(config: RunnableConfig) -> list[dict]:
-    """从 config.metadata 取本 run 的附件白名单（servicer 以 JSON 字符串注入）。"""
+    """从 config.metadata 取附件白名单 = **本轮附件 ∪ 本会话历史附件**（按 resource_key 去重，本轮优先）。
+
+    历史附件由 Go 聚合 runs.attachments 经 metadata["session_attachments"] 下发——
+    续轮改需求（如「把 HTML 改成滑块对比」）无需用户重传原图，image_generate 的
+    source_images/mask 与 script_runner 的 input_files 都能直接按文件名引用此前上传。
+    安全面不变：两份名单的 resource_key 都已过 Go 归属闸（owner 隔离）。
+    """
     if not config:
         return []
     meta = config.get("metadata") or {}
-    raw = meta.get("attachments")
-    if not raw:
-        return []
-    try:
-        parsed = _json.loads(raw) if isinstance(raw, str) else raw
-        return list(parsed) if isinstance(parsed, list) else []
-    except Exception:  # noqa: BLE001 — 白名单解析失败按无附件处理
-        return []
+    current = _parse_attachment_list(meta.get("attachments") or [])
+    history = _parse_attachment_list(meta.get("session_attachments") or [])
+    if not history:
+        return current
+    seen = {str(a.get("resource_key", "")) for a in current if isinstance(a, dict)}
+    merged = list(current)
+    for a in history:
+        if isinstance(a, dict) and str(a.get("resource_key", "")) not in seen:
+            seen.add(str(a.get("resource_key", "")))
+            merged.append(a)
+    return merged
 
 
 def build_skill_tools(
@@ -132,7 +172,8 @@ def build_skill_tools(
         """执行某个 skill 的脚本（容器隔离），返回输出摘要并登记产物。
 
         script_args 会作为单个 JSON 参数传给脚本。input_files 填**用户上传附件的文件名**
-        （本轮消息注记中列出的），脚本可在 $SKILL_INPUT_DIR 下按同名读取。
+        （本轮或本会话此前任意轮次上传的均可，无需用户重传），脚本可在 $SKILL_INPUT_DIR
+        下按同名读取。
         """
         sk = registry.get(skill)
         if sk is None:
@@ -149,7 +190,12 @@ def build_skill_tools(
             default_timeout=default_timeout, requested_timeout=timeout, input_files=staged,
         )
         run_id = _run_id_from_config(config)
-        result = await runner.run(req, run_id=run_id, tool_call_id=tool_call_id or "tc")
+        result = await runner.run(
+            req,
+            run_id=run_id,
+            tool_call_id=tool_call_id or "tc",
+            generated_key=_session_key_from_config(config),
+        )
         head = "脚本执行完成" if result.ok else f"脚本执行失败(exit={result.exit_code}, timeout={result.timed_out})"
         summary = f"{head}。stdout: {result.stdout[:800]}"
         if result.stderr.strip():

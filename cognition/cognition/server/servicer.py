@@ -246,6 +246,33 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
             except Exception as exc:  # noqa: BLE001 — 入库是增强路径，绝不拖垮 run
                 log.warning("attachment ingest failed: %s", exc)
 
+        # —— 会话历史附件（Go 聚合 runs.attachments 经 metadata 下发）——
+        # 白名单合并在 _attachments_from_config；此处再给模型一条可见注记：
+        # 没有它，模型不知道「此前上传的文件仍可按文件名引用」，会让用户重传（实测缺陷）。
+        session_atts_raw = req_meta.get("session_attachments", "")
+        history_names: list[str] = []
+        if session_atts_raw:
+            try:
+                import json as _json2
+
+                from cognition.attachments import normalize_attachments as _norm2
+
+                cur_keys = {a.get("resource_key") for a in _norm2(attachments)}
+                for a in _json2.loads(session_atts_raw):
+                    # 历史名单是 Go 原样透传的 camelCase（resourceKey/fileName），两种键形都认
+                    if isinstance(a, dict) and (a.get("resource_key") or a.get("resourceKey")) not in cur_keys:
+                        name = str(a.get("file_name") or a.get("fileName") or "")
+                        if name and name not in history_names:
+                            history_names.append(name)
+            except Exception:  # noqa: BLE001 — 历史名单解析失败按无历史处理（白名单侧同样容错）
+                history_names = []
+        if history_names:
+            shown = "、".join(history_names[:8])
+            more = f" 等 {len(history_names)} 个" if len(history_names) > 8 else ""
+            request.query = (
+                f"{request.query}\n（本会话此前上传的文件仍可直接按文件名使用，无需重传：{shown}{more}）"
+            )
+
         graph, state, recursion = self._build(request, ingested)
         # kb_id 单点解析进 metadata：knowledge_search（config 优先）与附件入库共用；
         # attachments 白名单供 script_runner 的 input_files 按文件名解析（M9）；
@@ -273,6 +300,10 @@ class CognitionServicer(agent_pb2_grpc.CognitionServiceServicer):
             from cognition.attachments import normalize_attachments as _norm
 
             metadata["attachments"] = _json.dumps(_norm(attachments), ensure_ascii=False)
+        if session_atts_raw:
+            # 原样透传（已在上方 best-effort 校验过可解析）；消费方 _attachments_from_config
+            # 与本轮 attachments 合并成白名单（resource_key 去重，本轮优先）。
+            metadata["session_attachments"] = session_atts_raw
         config = {
             "configurable": {"thread_id": session_id},
             "recursion_limit": recursion,

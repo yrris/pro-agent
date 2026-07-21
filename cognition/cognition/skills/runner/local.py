@@ -37,7 +37,9 @@ class LocalSubprocessScriptRunner:
             self._downloader = MinioDownloader(self._settings)
         return self._downloader
 
-    async def run(self, req: ScriptRunRequest, *, run_id: str, tool_call_id: str) -> ScriptResult:
+    async def run(
+        self, req: ScriptRunRequest, *, run_id: str, tool_call_id: str, generated_key: str | None = None
+    ) -> ScriptResult:
         out_dir = tempfile.mkdtemp(prefix="skill-out-")
         env = {**os.environ, "SKILL_OUTPUT_DIR": out_dir, "SKILL_ARGS": req.cmd[-1]}
         if req.input_files:
@@ -48,11 +50,13 @@ class LocalSubprocessScriptRunner:
             except Exception as exc:  # noqa: BLE001 — 输入落地失败=确定性前置失败
                 return ScriptResult(exit_code=126, stdout="", stderr=f"输入文件下载失败: {exc}")
             env["SKILL_INPUT_DIR"] = in_dir
-        # B.1：本 run 若有生成图暂存，暴露 SKILL_GENERATED_DIR 供 render_page 内联。
+        # B.1：生成图暂存挂载（generated_key=会话作用域键，续轮可复用此前轮次的生成图；
+        # 缺省回落 run_id 保持旧行为）。
         from cognition.skills.runner.scratch import has_generated, run_generated_dir
 
-        if has_generated(run_id):
-            env["SKILL_GENERATED_DIR"] = run_generated_dir(run_id)
+        gk = generated_key or run_id
+        if has_generated(gk):
+            env["SKILL_GENERATED_DIR"] = run_generated_dir(gk)
         cmd = list(req.cmd)
         # local 专属：.py 用当前 venv 解释器（裸 python3 取自 PATH，技能依赖组装在 venv 里
         # 会失效）。req.cmd 保持 python3 不动——docker 路径按容器内解释器执行。

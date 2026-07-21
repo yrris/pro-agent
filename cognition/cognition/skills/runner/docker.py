@@ -76,7 +76,9 @@ class DockerScriptRunner:
         ]
         return argv
 
-    async def run(self, req: ScriptRunRequest, *, run_id: str, tool_call_id: str) -> ScriptResult:
+    async def run(
+        self, req: ScriptRunRequest, *, run_id: str, tool_call_id: str, generated_key: str | None = None
+    ) -> ScriptResult:
         out_dir = tempfile.mkdtemp(prefix="skill-out-")
         in_dir: str | None = None
         if req.input_files:
@@ -87,7 +89,8 @@ class DockerScriptRunner:
                 return ScriptResult(exit_code=126, stdout="", stderr=f"输入文件下载失败: {exc}")
         from cognition.skills.runner.scratch import has_generated, run_generated_dir
 
-        gen_dir = run_generated_dir(run_id) if has_generated(run_id) else None
+        gk = generated_key or run_id  # 会话作用域键（续轮复用生成图），缺省回落 run_id
+        gen_dir = run_generated_dir(gk) if has_generated(gk) else None
         argv = self._docker_argv(req, out_dir, in_dir, gen_dir)
         try:
             proc = await asyncio.create_subprocess_exec(

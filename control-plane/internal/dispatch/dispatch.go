@@ -139,11 +139,22 @@ func (d *Dispatcher) Run(ctx context.Context, cmd StartCommand, sink stream.Sink
 	for _, a := range cmd.Attachments {
 		atts = append(atts, cognition.Attachment(a))
 	}
+	// 会话历史附件聚合（best-effort）：续轮无需用户重传即可按文件名引用此前上传。
+	// fake/不支持的 repo 自然降级为无历史；查询失败只记日志，绝不阻断 run。
+	var sessionAtts []byte
+	if reader, ok := d.runs.(store.SessionAttachmentsReader); ok {
+		if b, aerr := reader.SessionAttachmentsJSON(ctx, cmd.SessionID, cmd.OwnerID, cmd.RunID); aerr == nil {
+			sessionAtts = b
+		} else if log != nil {
+			log.Warn("session attachments aggregate failed", "err", aerr)
+		}
+	}
 	st, err := d.client.RunAgent(ctx, cognition.RunRequest{
 		RunID: cmd.RunID, SessionID: cmd.SessionID, Query: cmd.Query, AgentType: agentType, OutputFormat: cmd.OutputFormat, ImageGen: cmd.ImageGen,
 		ApprovalResumeID: cmd.ApprovalResumeID, ApprovalDecision: cmd.ApprovalDecision, ApprovalComment: cmd.ApprovalComment,
 		ForkFromSessionID: cmd.ForkFromSessionID, ForkFromRunID: cmd.ForkFromRunID,
 		MaxSteps: d.maxSteps, OwnerID: cmd.OwnerID, Attachments: atts,
+		SessionAttachmentsJSON: sessionAtts,
 	})
 	if err != nil {
 		_ = d.runs.FinishRun(finCtx, store.FinishRunParams{RunID: cmd.RunID, Status: store.StatusFailed, ErrorMsg: err.Error()})
