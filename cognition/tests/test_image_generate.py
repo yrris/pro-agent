@@ -341,6 +341,8 @@ def test_openai_edits_multipart_shape_with_mask():
     calls: list[dict] = []
 
     class _FakeResp:
+        status_code = 200  # provider 现按 status_code 判错（错误体透传修复）
+
         def raise_for_status(self):
             pass
 
@@ -653,3 +655,20 @@ def test_image_generate_no_mask_exif_source_untouched():
              "name": "image_generate", "type": "tool_call"},
             config={"metadata": _MASK_META}))
     assert s.got_images == [rotated_src]  # EXIF 原样保留：无蒙版路径零感知
+
+
+def test_format_openai_image_error_surfaces_moderation_body():
+    """缺陷回归：/images/edits 400 只抛状态行、吞响应体 → 模型盲猜格式/尺寸浪费重试。
+    修复后 error.code/message（如安全审核拦截）必须进错误串。"""
+    from cognition.providers.image.openai import format_openai_image_error
+
+    body = (
+        '{"error": {"message": "Your request was rejected by the safety system. '
+        'safety_violations=[sexual].", "type": "image_generation_user_error", '
+        '"code": "moderation_blocked"}}'
+    )
+    s = format_openai_image_error(400, body)
+    assert "moderation_blocked" in s and "safety system" in s and "HTTP 400" in s
+
+    assert format_openai_image_error(502, "<html>bad gateway</html>").startswith("HTTP 502: <html>")
+    assert "HTTP 400" in format_openai_image_error(400, '{"error": {}}')  # 空 error 回落原文

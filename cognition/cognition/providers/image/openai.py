@@ -8,6 +8,7 @@ gpt-image 系列默认返回 b64_json，无需 response_format 参数。
 from __future__ import annotations
 
 import base64
+import json
 from typing import Any, Optional
 
 import httpx
@@ -62,6 +63,24 @@ def sniff_image_type(data: bytes) -> tuple[str, str]:
     if data[:6] in (b"GIF87a", b"GIF89a"):
         return "gif", "image/gif"
     return "png", "image/png"
+
+
+def format_openai_image_error(status_code: int, body_text: str) -> str:
+    """非 2xx 响应 → 模型/用户可读的错误行（纯函数，可测）。
+
+    OpenAI 把拒绝原因放在 body 的 error.message/code（如 moderation_blocked 安全审核
+    拦截）——此前只 raise_for_status 抛状态行、吞掉 body，模型看不到真实原因只能盲猜
+    格式/尺寸浪费重试（线上缺陷：图生图内容触审 400，被误判为接口坏了）。
+    """
+    try:
+        err = json.loads(body_text).get("error") or {}
+        code = str(err.get("code") or "").strip()
+        msg = " ".join(str(err.get("message") or "").split())[:280]
+        if code or msg:
+            return f"HTTP {status_code} {code}: {msg}".strip()
+    except Exception:  # noqa: BLE001 — body 非 JSON 时回落原文截断
+        pass
+    return f"HTTP {status_code}: {body_text[:200]}"
 
 
 def parse_openai_images(data: dict[str, Any]) -> list[bytes]:
@@ -121,5 +140,8 @@ class OpenAIImageProvider:
                     headers=headers,
                     json=build_openai_image_payload(self._model, prompt, size, self._quality, n),
                 )
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                # 带响应体抛错：审核拦截/参数错误等真实原因必须进工具观察串（模型据此止损，
+                # 而不是盲猜格式/尺寸反复重试）。
+                raise RuntimeError("openai images " + format_openai_image_error(resp.status_code, resp.text))
             return parse_openai_images(resp.json())
