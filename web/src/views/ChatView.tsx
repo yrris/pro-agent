@@ -636,7 +636,8 @@ export function ChatView({
             onLostPointerCapture={onDragEnd}
             className="hidden w-1 shrink-0 touch-none cursor-col-resize bg-border/40 transition-colors select-none hover:bg-primary/50 lg:block"
           />
-          <div style={{ width: artifactsWidth }} className="hidden shrink-0 lg:block">
+          {/* max-w 兜底：极窄窗口下即使存量宽度值偏大，dock 也不越过视口（主修复是父链 min-w-0）。 */}
+          <div style={{ width: artifactsWidth }} className="hidden max-w-[70vw] shrink-0 lg:block">
             <WorkspacePanel
               artifacts={artifacts}
               uploads={uploads}

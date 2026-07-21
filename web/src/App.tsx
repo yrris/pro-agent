@@ -241,9 +241,11 @@ export default function App() {
           onLogout={logout}
         />
       )}
-      <div className="flex min-h-0 flex-1 flex-col">
+      {/* min-w-0 必不可少：flex item 默认 min-width:auto 会以内容 min-content 为下限拒绝收缩，
+          聊天列+右 dock 的固定宽会把整行撑出视口（dock 拖宽时右缘溢出窗口的根因）。 */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* ChatView 常挂载（保住流式 DOM/滚动位置），非 chat 视图用 hidden 盖住 */}
-        <div className={effectiveNav === "chat" ? "flex min-h-0 flex-1" : "hidden"}>
+        <div className={effectiveNav === "chat" ? "flex min-h-0 min-w-0 flex-1" : "hidden"}>
           <ChatView
             visible={effectiveNav === "chat"}
             timeline={run.timeline}
